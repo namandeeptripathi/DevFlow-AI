@@ -54,6 +54,7 @@ public class AuthenticationService {
     private final RefreshTokenService refreshTokenService;
     private final CustomUserDetailsService userDetailsService;
     private final JwtProperties jwtProperties;
+    private final com.devflow.auth.verification.EmailVerificationService emailVerificationService;
 
     public AuthenticationService(
             UserRepository userRepository,
@@ -61,7 +62,8 @@ public class AuthenticationService {
             JwtTokenProvider jwtTokenProvider,
             RefreshTokenService refreshTokenService,
             CustomUserDetailsService userDetailsService,
-            JwtProperties jwtProperties
+            JwtProperties jwtProperties,
+            com.devflow.auth.verification.EmailVerificationService emailVerificationService
     ) {
         this.userRepository = Objects.requireNonNull(userRepository, "userRepository must not be null");
         this.passwordEncoder = Objects.requireNonNull(passwordEncoder, "passwordEncoder must not be null");
@@ -69,10 +71,11 @@ public class AuthenticationService {
         this.refreshTokenService = Objects.requireNonNull(refreshTokenService, "refreshTokenService must not be null");
         this.userDetailsService = Objects.requireNonNull(userDetailsService, "userDetailsService must not be null");
         this.jwtProperties = Objects.requireNonNull(jwtProperties, "jwtProperties must not be null");
+        this.emailVerificationService = Objects.requireNonNull(emailVerificationService, "emailVerificationService must not be null");
     }
 
     /**
-     * Registers a new user identity in the platform.
+     * Registers a new user identity in the platform and generates an initial email verification token.
      *
      * @param request user registration payload
      * @param ipAddress client IP address
@@ -109,6 +112,10 @@ public class AuthenticationService {
 
         User savedUser = userRepository.save(user);
         log.info("Registered new user identity ID [{}] email [{}]", savedUser.getId(), savedUser.getEmail());
+
+        // Automatically generate database-backed email verification token
+        String verificationToken = emailVerificationService.generateVerificationToken(savedUser);
+        log.debug("Generated email verification token for user [{}]", savedUser.getId());
 
         DevFlowUserDetails userDetails = new DevFlowUserDetails(savedUser);
         String accessToken = jwtTokenProvider.generateAccessToken(userDetails);

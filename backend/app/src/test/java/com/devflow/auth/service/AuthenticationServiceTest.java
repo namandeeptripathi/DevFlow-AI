@@ -57,6 +57,9 @@ class AuthenticationServiceTest {
     @Mock
     private CustomUserDetailsService userDetailsService;
 
+    @Mock
+    private com.devflow.auth.verification.EmailVerificationService emailVerificationService;
+
     private JwtProperties jwtProperties;
     private AuthenticationService authenticationService;
     private UUID userId;
@@ -73,7 +76,8 @@ class AuthenticationServiceTest {
                 jwtTokenProvider,
                 refreshTokenService,
                 userDetailsService,
-                jwtProperties
+                jwtProperties,
+                emailVerificationService
         );
 
         userId = UUID.randomUUID();
