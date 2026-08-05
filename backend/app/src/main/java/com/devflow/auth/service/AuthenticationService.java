@@ -26,6 +26,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.UUID;
 
 /**
@@ -130,6 +131,8 @@ public class AuthenticationService {
         return buildAuthResponse(accessToken, refreshToken, savedUser);
     }
 
+    private static final String DUMMY_BCRYPT_HASH = "$2a$12$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL17lhWy";
+
     /**
      * Authenticates a user by email or username credentials.
      *
@@ -147,11 +150,16 @@ public class AuthenticationService {
 
         String identifier = request.getLogin().trim();
 
-        User user = userRepository.findByEmailOrUsername(identifier, identifier)
-                .orElseThrow(() -> {
-                    log.warn("Authentication failed: user identifier [{}] not found", identifier);
-                    return new InvalidCredentialsException("Invalid username/email or password");
-                });
+        Optional<User> userOpt = userRepository.findByEmailOrUsername(identifier, identifier);
+
+        if (userOpt.isEmpty()) {
+            // Constant-time evaluation to mitigate username/email enumeration via response timing side-channel
+            passwordEncoder.matches(request.getPassword(), DUMMY_BCRYPT_HASH);
+            log.warn("Authentication failed: user identifier [{}] not found", identifier);
+            throw new InvalidCredentialsException("Invalid username/email or password");
+        }
+
+        User user = userOpt.get();
 
         if (!passwordEncoder.matches(request.getPassword(), user.getPasswordHash())) {
             log.warn("Authentication failed: invalid password for user [{}]", user.getId());
