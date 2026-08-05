@@ -61,6 +61,7 @@ dependencies {
     testImplementation(libs.spring.security.test)
     testImplementation(libs.testcontainers.junit.jupiter)
     testImplementation(libs.testcontainers.postgresql)
+    testRuntimeOnly(libs.h2)
     testImplementation(libs.mockito.core)
 
     // Lombok in tests

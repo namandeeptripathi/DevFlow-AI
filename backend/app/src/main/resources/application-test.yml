@@ -24,13 +24,13 @@ spring:
   # and password at test runtime. The values below are fallback defaults for
   # environments where @ServiceConnection is not used.
   datasource:
-    url: jdbc:tc:postgresql:16-alpine:///devflow_test
-    username: test
-    password: test
-    driver-class-name: org.testcontainers.jdbc.ContainerDatabaseDriver
+    url: jdbc:h2:mem:devflow_test;MODE=PostgreSQL;DATABASE_TO_LOWER=TRUE;DEFAULT_NULL_ORDERING=HIGH;DB_CLOSE_DELAY=-1
+    username: sa
+    password:
+    driver-class-name: org.h2.Driver
     hikari:
       pool-name: DevFlow-Test-Pool
-      maximum-pool-size: 3
+      maximum-pool-size: 5
       minimum-idle: 1
 
   # ── Redis ─────────────────────────────────────────────────────────────────

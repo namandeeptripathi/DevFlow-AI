@@ -62,6 +62,7 @@ spring-security-test               = { module = "org.springframework.security:sp
 testcontainers-bom                 = { module = "org.testcontainers:testcontainers-bom", version.ref = "testcontainers" }
 testcontainers-junit-jupiter       = { module = "org.testcontainers:junit-jupiter" }
 testcontainers-postgresql          = { module = "org.testcontainers:postgresql" }
+h2                              = { module = "com.h2database:h2" }
 mockito-core                       = { module = "org.mockito:mockito-core", version.ref = "mockito" }
 
 [plugins]
