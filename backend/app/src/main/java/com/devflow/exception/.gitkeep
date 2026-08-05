@@ -1,0 +1,10 @@
+# This package holds the global exception handling infrastructure:
+# the @RestControllerAdvice exception advisor, error response builder,
+# and the canonical error envelope mapping logic.
+#
+# All domain modules throw typed exceptions (BusinessException,
+# EntityNotFoundException, UnauthorizedException) defined in
+# devflow-shared-kernel. This package catches and translates them
+# into the standard API error response format.
+#
+# Reference: docs/api/ERROR_RESPONSE_FORMAT.md

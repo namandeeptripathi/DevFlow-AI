@@ -1,0 +1,87 @@
+# ──────────────────────────────────────────────────────────────────────────────
+# DevFlow — Development Profile Configuration
+#
+# Active when: SPRING_PROFILES_ACTIVE=dev (default local profile)
+#
+# This profile configures the application for local development:
+# - Connects to the Docker Compose PostgreSQL and Redis instances
+# - Enables Spring Boot DevTools for hot reloading
+# - Uses relaxed security settings suitable for local testing
+# - Enables verbose SQL and Hibernate logging for debugging
+# - Exposes all Actuator endpoints for local inspection
+#
+# Prerequisites:
+#   Run: docker-compose up -d (from backend/ directory)
+#
+# Reference: docs/configuration/CONFIGURATION_STRATEGY.md §6 (Environment Strategy)
+# ──────────────────────────────────────────────────────────────────────────────
+
+spring:
+  # ── Database (local Docker Compose PostgreSQL) ────────────────────────────
+  datasource:
+    url: jdbc:postgresql://localhost:5432/devflow_dev
+    username: devflow
+    password: devflow_secret
+    driver-class-name: org.postgresql.Driver
+    hikari:
+      pool-name: DevFlow-Dev-Pool
+      maximum-pool-size: 5
+      minimum-idle: 2
+      connection-timeout: 30000
+      idle-timeout: 600000
+      max-lifetime: 1800000
+
+  # ── Redis (local Docker Compose Redis) ───────────────────────────────────
+  data:
+    redis:
+      host: localhost
+      port: 6379
+      # No authentication in local dev environment
+      password:
+      database: 0
+
+  # ── JPA / Hibernate (dev-friendly verbose settings) ─────────────────────
+  jpa:
+    show-sql: true
+    properties:
+      hibernate:
+        format_sql: true
+
+  # ── DevTools ─────────────────────────────────────────────────────────────
+  devtools:
+    restart:
+      enabled: true
+    livereload:
+      enabled: true
+
+  # ── Flyway ───────────────────────────────────────────────────────────────
+  flyway:
+    enabled: true
+
+# ── Actuator (expose everything in dev for easy inspection) ──────────────────
+management:
+  endpoints:
+    web:
+      exposure:
+        include: "*"
+  endpoint:
+    health:
+      show-details: always
+
+# ── SpringDoc (fully enabled in dev) ─────────────────────────────────────────
+springdoc:
+  api-docs:
+    enabled: true
+  swagger-ui:
+    enabled: true
+
+# ── Logging (verbose for development debugging) ───────────────────────────────
+logging:
+  level:
+    root: INFO
+    com.devflow: DEBUG
+    org.springframework.security: DEBUG
+    org.springframework.web: DEBUG
+    org.hibernate.SQL: DEBUG
+    org.hibernate.orm.jdbc.bind: TRACE
+    org.flywaydb: DEBUG

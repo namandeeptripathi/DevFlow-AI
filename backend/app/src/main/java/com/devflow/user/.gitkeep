@@ -1,0 +1,10 @@
+# Bootstrap package for user-related application-level concerns.
+#
+# The User aggregate root is owned by the devflow-auth module:
+#   com.devflow.modules.auth.domain.User
+#
+# This package is reserved for application-level user concerns that
+# are cross-cutting (e.g., current user context resolution, user
+# profile caching layer, self-service endpoint adapters).
+#
+# Reference: docs/architecture/DOMAIN_MODEL.md §3.1

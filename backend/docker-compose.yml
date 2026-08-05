@@ -1,0 +1,90 @@
+# ──────────────────────────────────────────────────────────────────────────────
+# DevFlow — Docker Compose (Local Development)
+#
+# Starts the infrastructure services required for local development.
+#
+# Usage:
+#   docker-compose up -d          # Start all services in background
+#   docker-compose down           # Stop and remove containers
+#   docker-compose down -v        # Stop and remove containers + volumes
+#   docker-compose logs -f        # Tail logs from all services
+#
+# Services:
+#   postgres  — PostgreSQL 16 (port 5432)
+#   redis     — Redis 7 with AOF persistence (port 6379)
+#
+# Connection details match application-dev.yml exactly.
+# Never use these credentials in staging or production.
+#
+# Reference: docs/configuration/CONFIGURATION_STRATEGY.md §6
+# Infrastructure docs: docs/infrastructure/docker/ (future)
+# ──────────────────────────────────────────────────────────────────────────────
+
+name: devflow-local
+
+services:
+
+  # ── PostgreSQL ─────────────────────────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    container_name: devflow-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: devflow_dev
+      POSTGRES_USER: devflow
+      POSTGRES_PASSWORD: devflow_secret
+      # Enable pgcrypto for UUID generation support
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=en_US.UTF-8"
+    ports:
+      - "5432:5432"
+    volumes:
+      - devflow-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U devflow -d devflow_dev"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      - devflow-network
+
+  # ── Redis ───────────────────────────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: devflow-redis
+    restart: unless-stopped
+    command: >
+      redis-server
+      --appendonly yes
+      --appendfilename devflow.aof
+      --appendfsync everysec
+      --maxmemory 256mb
+      --maxmemory-policy allkeys-lru
+      --loglevel notice
+    ports:
+      - "6379:6379"
+    volumes:
+      - devflow-redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+    networks:
+      - devflow-network
+
+# ── Volumes ───────────────────────────────────────────────────────────────────
+volumes:
+  devflow-postgres-data:
+    driver: local
+    name: devflow-postgres-data
+  devflow-redis-data:
+    driver: local
+    name: devflow-redis-data
+
+# ── Networks ──────────────────────────────────────────────────────────────────
+networks:
+  devflow-network:
+    driver: bridge
+    name: devflow-network

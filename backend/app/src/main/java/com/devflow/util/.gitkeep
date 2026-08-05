@@ -1,0 +1,11 @@
+# This package holds application-level utility classes that are genuinely
+# universal and carry no domain semantics.
+#
+# Examples of permitted contents:
+#   - String normalization utilities
+#   - Date/time formatting helpers
+#   - JSON serialization utilities
+#
+# Domain utilities belong in their owning module's api/ package.
+# See docs/architecture/REPOSITORY_STRUCTURE.md §11.4 for the
+# Shared Utilities Anti-Pattern that this constraint guards against.

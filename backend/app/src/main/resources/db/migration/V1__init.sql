@@ -1,0 +1,29 @@
+-- ──────────────────────────────────────────────────────────────────────────────
+-- DevFlow — Initial Migration
+--
+-- Migration: V1__init.sql
+-- Author:    DevFlow Backend Platform Team
+-- Date:      2026-08-05
+--
+-- This is the baseline migration that establishes the foundation of the
+-- DevFlow database schema. Individual domain module schemas will be added
+-- in subsequent versioned migrations following the pattern:
+--   V<N>__<module>_<description>.sql
+--
+-- Migration Conventions (docs/database/MIGRATION_STRATEGY.md):
+--   - All migrations are forward-only (no destructive rollback scripts).
+--   - Each migration is idempotent where feasible (CREATE IF NOT EXISTS).
+--   - Table names use snake_case and are plural.
+--   - Primary keys use UUIDs (UUID v7 preferred for time-ordering).
+--   - All tables include: created_at, updated_at (managed by triggers).
+--   - Organization ID (tenant discriminator) is indexed on all tenant-scoped tables.
+--   - No cross-schema SQL joins are permitted (each module owns its schema).
+--
+-- This file is intentionally empty at the foundation stage.
+-- Schema DDL for each bounded context will be introduced in dedicated
+-- migrations aligned with their module scaffolding:
+--   V2__iam_schema.sql           (devflow-auth)
+--   V3__project_management_schema.sql (devflow-project-management)
+--   V4__repository_intelligence_schema.sql (devflow-repository-intelligence)
+--   ...etc.
+-- ──────────────────────────────────────────────────────────────────────────────

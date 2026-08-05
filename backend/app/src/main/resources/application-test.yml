@@ -1,0 +1,86 @@
+# ──────────────────────────────────────────────────────────────────────────────
+# DevFlow — Test Profile Configuration
+#
+# Active when: @ActiveProfiles("test") in test classes
+#
+# This profile configures the application for integration testing:
+# - PostgreSQL and Redis are managed by Testcontainers (real Docker containers)
+# - DataSource URL is auto-configured by Testcontainers via @ServiceConnection
+#   (Spring Boot 3.1+): no hardcoded JDBC URLs required
+# - Flyway runs all migrations against the test container on startup
+# - DevTools and hot-reload are disabled
+# - Actuator endpoints limited to health only
+# - Security configuration unchanged from base to test real filters
+#
+# Testcontainers requires Docker to be running on the test host.
+# For CI: ensure Docker-in-Docker or host Docker socket is available.
+#
+# Reference: docs/configuration/CONFIGURATION_STRATEGY.md §6
+# ──────────────────────────────────────────────────────────────────────────────
+
+spring:
+  # ── DataSource ────────────────────────────────────────────────────────────
+  # Testcontainers @ServiceConnection dynamically provides the URL, username,
+  # and password at test runtime. The values below are fallback defaults for
+  # environments where @ServiceConnection is not used.
+  datasource:
+    url: jdbc:tc:postgresql:16-alpine:///devflow_test
+    username: test
+    password: test
+    driver-class-name: org.testcontainers.jdbc.ContainerDatabaseDriver
+    hikari:
+      pool-name: DevFlow-Test-Pool
+      maximum-pool-size: 3
+      minimum-idle: 1
+
+  # ── Redis ─────────────────────────────────────────────────────────────────
+  # Testcontainers manages Redis in test; override host/port here or use
+  # @ServiceConnection in test configuration classes.
+  data:
+    redis:
+      host: localhost
+      port: 6370  # offset to avoid conflict with local dev Redis
+
+  # ── JPA ──────────────────────────────────────────────────────────────────
+  jpa:
+    show-sql: false
+    properties:
+      hibernate:
+        format_sql: false
+
+  # ── DevTools: disabled in test ────────────────────────────────────────────
+  devtools:
+    restart:
+      enabled: false
+    livereload:
+      enabled: false
+
+  # ── Flyway ───────────────────────────────────────────────────────────────
+  flyway:
+    enabled: true
+    clean-on-validation-error: false
+
+# ── Actuator (minimal exposure in test) ──────────────────────────────────────
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health
+  endpoint:
+    health:
+      show-details: never
+
+# ── SpringDoc (disabled in test — not needed for API tests) ──────────────────
+springdoc:
+  api-docs:
+    enabled: false
+  swagger-ui:
+    enabled: false
+
+# ── Logging ────────────────────────────────────────────────────────────────────
+logging:
+  level:
+    root: WARN
+    com.devflow: INFO
+    org.flywaydb: INFO
+    org.testcontainers: INFO

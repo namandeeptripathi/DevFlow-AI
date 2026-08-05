@@ -1,0 +1,8 @@
+# This package holds global Spring @Configuration classes that apply
+# application-wide: SecurityConfiguration, RedisConfiguration,
+# WebMvcConfiguration, AsyncConfiguration, etc.
+#
+# Each domain module owns its own config/ package under its module package.
+# This package is for cross-cutting, app-level configurations only.
+#
+# Reference: docs/architecture/REPOSITORY_STRUCTURE.md §5.3.6

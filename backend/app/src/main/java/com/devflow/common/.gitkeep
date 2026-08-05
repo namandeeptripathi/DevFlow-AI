@@ -1,0 +1,7 @@
+# This package holds application-wide common utilities that do not belong
+# to any specific bounded context.
+#
+# IMPORTANT: This package must not become a dumping ground. Before adding
+# anything here, verify it cannot belong to a specific module's api/ package.
+# See docs/architecture/REPOSITORY_STRUCTURE.md §11.4 for the anti-pattern
+# this constraint guards against.

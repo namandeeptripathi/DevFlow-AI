@@ -1,0 +1,8 @@
+# This package holds application-level Spring Security configuration:
+# the Security Filter Chain, CORS policy, CSRF configuration,
+# and security-related beans that apply across all domain modules.
+#
+# Module-scoped security configurations live in each module's own
+# config/ package under com.devflow.modules.<module>.config.
+#
+# Reference: docs/security/AUTHORIZATION_MODEL.md §2

@@ -1,0 +1,12 @@
+# Bootstrap package for workspace-level application concerns.
+#
+# A Workspace is the operational scope within an Organization.
+# WorkspaceMembership entities (User + Organization + Role) are
+# owned by the devflow-auth module.
+#
+# This package is reserved for application-level workspace context
+# management: active workspace resolution, workspace context switching,
+# and workspace-scoped request interceptors.
+#
+# Reference: docs/architecture/DOMAIN_MODEL.md §3.1
+# Reference: docs/security/AUTHORIZATION_MODEL.md §8.1 (Workspace Isolation Model)

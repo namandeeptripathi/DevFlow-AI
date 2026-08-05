@@ -1,0 +1,12 @@
+# Bootstrap package for permission management application concerns.
+#
+# The Permission value object is defined in the devflow-auth module:
+#   com.devflow.modules.auth.domain.Permission
+#
+# This package holds the application-level permission registry,
+# permission evaluator, and @PreAuthorize expression utilities
+# that modules reference to enforce authorization.
+#
+# Naming convention: {resource}.{action} (e.g., project.read, task.create)
+#
+# Reference: docs/security/AUTHORIZATION_MODEL.md §6 (Permission Model)

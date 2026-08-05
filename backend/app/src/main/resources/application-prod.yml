@@ -1,0 +1,122 @@
+# ──────────────────────────────────────────────────────────────────────────────
+# DevFlow — Production Profile Configuration
+#
+# Active when: SPRING_PROFILES_ACTIVE=prod
+#
+# This profile applies production-hardened settings.
+#
+# SECURITY CONTRACT:
+#   All values marked with ${ENV_VAR} MUST be supplied as environment variables
+#   or via the secrets manager. The application will REFUSE TO START if any
+#   required value is absent (fail-fast validation — see ConfigurationValidator).
+#   Never hardcode production credentials in this file.
+#
+# Reference: docs/configuration/CONFIGURATION_STRATEGY.md §7 (Secret Management)
+# ──────────────────────────────────────────────────────────────────────────────
+
+spring:
+  # ── Database ──────────────────────────────────────────────────────────────
+  datasource:
+    url: ${DEVFLOW_DB_URL}
+    username: ${DEVFLOW_DB_USERNAME}
+    password: ${DEVFLOW_DB_PASSWORD}
+    driver-class-name: org.postgresql.Driver
+    hikari:
+      pool-name: DevFlow-Prod-Pool
+      maximum-pool-size: 20
+      minimum-idle: 5
+      connection-timeout: 30000
+      idle-timeout: 600000
+      max-lifetime: 1800000
+      # Validate connections before borrow
+      connection-test-query: SELECT 1
+      keepalive-time: 60000
+
+  # ── Redis ─────────────────────────────────────────────────────────────────
+  data:
+    redis:
+      host: ${DEVFLOW_REDIS_HOST}
+      port: ${DEVFLOW_REDIS_PORT:6379}
+      password: ${DEVFLOW_REDIS_PASSWORD}
+      database: 0
+      ssl:
+        enabled: true
+      lettuce:
+        pool:
+          max-active: 20
+          max-idle: 10
+          min-idle: 5
+
+  # ── JPA (production: no SQL output, strict validation) ────────────────────
+  jpa:
+    show-sql: false
+    properties:
+      hibernate:
+        format_sql: false
+        # Production: generate_statistics only if performance monitoring is active
+        generate_statistics: false
+
+  # ── DevTools: never active in production ──────────────────────────────────
+  devtools:
+    restart:
+      enabled: false
+    livereload:
+      enabled: false
+
+  # ── Flyway ────────────────────────────────────────────────────────────────
+  flyway:
+    enabled: true
+    out-of-order: false
+    baseline-on-migrate: false
+    # Production migrations are applied and cannot be rolled back automatically
+    validate-on-migrate: true
+
+# ── Server (production hardening) ─────────────────────────────────────────────
+server:
+  port: ${PORT:8080}
+  compression:
+    enabled: true
+  # Forward headers from reverse proxy / load balancer
+  forward-headers-strategy: native
+  tomcat:
+    # Production-grade connection limits
+    max-connections: 10000
+    accept-count: 200
+    threads:
+      max: 200
+      min-spare: 20
+    connection-timeout: 20000
+
+# ── Actuator (restricted in production) ───────────────────────────────────────
+management:
+  server:
+    port: ${MANAGEMENT_PORT:8081}
+  endpoints:
+    web:
+      exposure:
+        # Only health, info, and prometheus metrics for monitoring
+        include: health,info,metrics,prometheus
+  endpoint:
+    health:
+      show-details: when-authorized
+    prometheus:
+      enabled: true
+
+# ── SpringDoc (disabled in production — not exposed externally) ───────────────
+springdoc:
+  api-docs:
+    enabled: false
+  swagger-ui:
+    enabled: false
+
+# ── Logging (structured JSON in production for log aggregation) ───────────────
+# Reference: docs/observability/LOGGING_STRATEGY.md
+logging:
+  level:
+    root: WARN
+    com.devflow: INFO
+    org.springframework: WARN
+    org.hibernate: WARN
+    org.flywaydb: INFO
+  # In production, configure a JSON log appender (e.g., Logstash encoder)
+  # via external logback-spring.xml instead of console pattern.

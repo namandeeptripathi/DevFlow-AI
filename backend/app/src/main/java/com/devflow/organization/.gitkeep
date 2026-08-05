@@ -1,0 +1,12 @@
+# Bootstrap package for organization (tenant) application-level concerns.
+#
+# The Organization aggregate root (primary tenant boundary) is owned
+# by the devflow-auth module:
+#   com.devflow.modules.auth.domain.Organization
+#
+# This package holds application-level organization concerns:
+# tenant context resolution, organization context switching,
+# and organization-scoped request filtering.
+#
+# Reference: docs/architecture/DOMAIN_MODEL.md §3.1
+# Reference: docs/security/AUTHORIZATION_MODEL.md §8 (Multi-Tenant Authorization)

@@ -1,0 +1,10 @@
+# Bootstrap package for the devflow-auth bounded context adapter.
+#
+# When the devflow-auth module is scaffolded, this package will hold
+# the application-level bridge that wires the auth module into the
+# Spring Security filter chain.
+#
+# Core auth logic (User aggregate, JWT, RBAC) will reside in:
+#   com.devflow.modules.auth.*
+#
+# Reference: docs/architecture/DOMAIN_MODEL.md §3.1 (IAM Bounded Context)

@@ -1,0 +1,69 @@
+# ──────────────────────────────────────────────────────────────────────────────
+# DevFlow — Gradle Version Catalog
+#
+# This file is the single authoritative source for all dependency versions
+# in the DevFlow backend. All submodules reference versions from here.
+#
+# Reference: docs/architecture/REPOSITORY_STRUCTURE.md §10 (Build Organization)
+# ──────────────────────────────────────────────────────────────────────────────
+
+[versions]
+
+# ── Java ──────────────────────────────────────────────────────────────────────
+java = "21"
+
+# ── Spring ────────────────────────────────────────────────────────────────────
+spring-boot                 = "3.5.3"
+spring-dependency-management = "1.1.7"
+
+# ── Database ──────────────────────────────────────────────────────────────────
+postgresql     = "42.7.5"
+flyway         = "11.10.0"
+
+# ── Caching ───────────────────────────────────────────────────────────────────
+# Spring Data Redis is managed by the Spring Boot BOM
+
+# ── Documentation ─────────────────────────────────────────────────────────────
+springdoc-openapi = "3.0.3"
+
+# ── Development ───────────────────────────────────────────────────────────────
+lombok = "1.18.38"
+
+# ── Testing ───────────────────────────────────────────────────────────────────
+testcontainers  = "1.21.4"
+mockito         = "5.18.0"
+
+[libraries]
+
+# ── Spring Boot Starters ──────────────────────────────────────────────────────
+spring-boot-starter-web            = { module = "org.springframework.boot:spring-boot-starter-web" }
+spring-boot-starter-data-jpa       = { module = "org.springframework.boot:spring-boot-starter-data-jpa" }
+spring-boot-starter-security       = { module = "org.springframework.boot:spring-boot-starter-security" }
+spring-boot-starter-validation     = { module = "org.springframework.boot:spring-boot-starter-validation" }
+spring-boot-starter-actuator       = { module = "org.springframework.boot:spring-boot-starter-actuator" }
+spring-boot-starter-data-redis     = { module = "org.springframework.boot:spring-boot-starter-data-redis" }
+spring-boot-devtools               = { module = "org.springframework.boot:spring-boot-devtools" }
+spring-boot-configuration-processor = { module = "org.springframework.boot:spring-boot-configuration-processor" }
+
+# ── Database ──────────────────────────────────────────────────────────────────
+postgresql = { module = "org.postgresql:postgresql", version.ref = "postgresql" }
+flyway-core = { module = "org.flywaydb:flyway-core", version.ref = "flyway" }
+flyway-postgresql = { module = "org.flywaydb:flyway-database-postgresql", version.ref = "flyway" }
+
+# ── Documentation ─────────────────────────────────────────────────────────────
+springdoc-openapi-starter-webmvc-ui = { module = "org.springdoc:springdoc-openapi-starter-webmvc-ui", version.ref = "springdoc-openapi" }
+
+# ── Development ───────────────────────────────────────────────────────────────
+lombok = { module = "org.projectlombok:lombok", version.ref = "lombok" }
+
+# ── Testing ───────────────────────────────────────────────────────────────────
+spring-boot-starter-test           = { module = "org.springframework.boot:spring-boot-starter-test" }
+spring-security-test               = { module = "org.springframework.security:spring-security-test" }
+testcontainers-bom                 = { module = "org.testcontainers:testcontainers-bom", version.ref = "testcontainers" }
+testcontainers-junit-jupiter       = { module = "org.testcontainers:junit-jupiter" }
+testcontainers-postgresql          = { module = "org.testcontainers:postgresql" }
+mockito-core                       = { module = "org.mockito:mockito-core", version.ref = "mockito" }
+
+[plugins]
+spring-boot               = { id = "org.springframework.boot", version.ref = "spring-boot" }
+spring-dependency-management = { id = "io.spring.dependency-management", version.ref = "spring-dependency-management" }

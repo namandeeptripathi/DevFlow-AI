@@ -1,0 +1,11 @@
+# Bootstrap package for role management application concerns.
+#
+# The Role entity is owned by the devflow-auth module:
+#   com.devflow.modules.auth.domain.Role
+#
+# This package holds application-level role management adapters:
+# role assignment, role validation utilities, and role-to-permission
+# resolution used in the Security Filter Chain and method-level
+# authorization annotations.
+#
+# Reference: docs/security/AUTHORIZATION_MODEL.md §5 (RBAC)

@@ -1,0 +1,8 @@
+# Bootstrap package for team-level application concerns.
+#
+# Teams are logical groupings of users within an Organization,
+# scoped to specific Projects or Repository sets.
+#
+# This package is reserved for application-level team management:
+# team context resolution, team-scoped permission checks,
+# and team membership management adapters.

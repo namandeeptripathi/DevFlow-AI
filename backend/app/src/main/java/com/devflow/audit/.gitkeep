@@ -1,0 +1,8 @@
+# This package holds the auditing infrastructure: Spring Data Auditing
+# configuration, AuditorAware implementation, and audit event listeners.
+#
+# Audit events are critical for the multi-tenant authorization model.
+# All entity state changes (create, update, delete) are stamped with
+# the active userId and timestamp via @CreatedBy / @LastModifiedBy.
+#
+# Reference: docs/security/AUTHORIZATION_MODEL.md §13 (Audit & Authorization Events)

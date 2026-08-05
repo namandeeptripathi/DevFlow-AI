@@ -1,0 +1,158 @@
+# ──────────────────────────────────────────────────────────────────────────────
+# DevFlow — Base Application Configuration
+#
+# This file defines profile-agnostic defaults that apply in every environment.
+# Profile-specific overrides live in:
+#   application-dev.yml  — local development
+#   application-test.yml — integration test
+#   application-prod.yml — production
+#
+# Configuration Strategy: docs/configuration/CONFIGURATION_STRATEGY.md
+# All secrets are supplied via environment variables — never hardcoded here.
+# ──────────────────────────────────────────────────────────────────────────────
+
+spring:
+  application:
+    name: devflow-backend
+
+  # ── Profile activation ─────────────────────────────────────────────────────
+  # Default profile is 'dev'. Override via SPRING_PROFILES_ACTIVE env var
+  # or --spring.profiles.active JVM argument.
+  profiles:
+    default: dev
+
+  # ── Jackson (JSON serialization) ───────────────────────────────────────────
+  jackson:
+    # All API fields use camelCase — enforced by API Standards (§6)
+    property-naming-strategy: LOWER_CAMEL_CASE
+    # ISO-8601 timestamps with UTC offset — enforced by API Standards (§6)
+    serialization:
+      write-dates-as-timestamps: false
+      write-date-timestamps-as-nanoseconds: false
+    deserialization:
+      fail-on-unknown-properties: false
+    default-property-inclusion: non_null
+    time-zone: UTC
+
+  # ── JPA / Hibernate ────────────────────────────────────────────────────────
+  jpa:
+    # Never auto-generate DDL — schema is managed exclusively by Flyway
+    hibernate:
+      ddl-auto: validate
+    properties:
+      hibernate:
+        # PostgreSQL dialect is auto-detected; explicit setting for clarity
+        dialect: org.hibernate.dialect.PostgreSQLDialect
+        format_sql: false
+        default_batch_fetch_size: 20
+        order_inserts: true
+        order_updates: true
+        jdbc:
+          batch_size: 20
+          lob:
+            non_contextual_creation: true
+    open-in-view: false
+
+  # ── Flyway ─────────────────────────────────────────────────────────────────
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+    baseline-on-migrate: false
+    validate-on-migrate: true
+    # Out-of-order migration is never permitted in production
+    out-of-order: false
+
+  # ── Redis ─────────────────────────────────────────────────────────────────
+  data:
+    redis:
+      # Connection values are overridden per-profile via environment variables
+      timeout: 2000ms
+      lettuce:
+        pool:
+          max-active: 10
+          max-idle: 5
+          min-idle: 2
+          max-wait: 1000ms
+
+  # ── Servlet / Web ─────────────────────────────────────────────────────────
+  mvc:
+    # Default media type for all responses
+    contentnegotiation:
+      default-content-type: application/json
+  servlet:
+    multipart:
+      enabled: true
+      max-file-size: 10MB
+      max-request-size: 10MB
+
+# ── Server ───────────────────────────────────────────────────────────────────
+server:
+  port: 8080
+  servlet:
+    context-path: /
+  compression:
+    enabled: true
+    mime-types: application/json,application/xml,text/html,text/xml,text/plain
+    min-response-size: 1024
+  error:
+    # Never expose error details to clients — handled by GlobalExceptionAdvisor
+    include-message: never
+    include-binding-errors: never
+    include-stacktrace: never
+    include-exception: false
+
+# ── Actuator ─────────────────────────────────────────────────────────────────
+management:
+  server:
+    port: 8081
+  endpoints:
+    web:
+      base-path: /actuator
+      exposure:
+        # Expose only essential endpoints; profile-specific files may expand
+        include: health,info,metrics,prometheus
+  endpoint:
+    health:
+      show-details: when-authorized
+      probes:
+        enabled: true
+    info:
+      enabled: true
+  info:
+    env:
+      enabled: true
+
+# ── SpringDoc OpenAPI ─────────────────────────────────────────────────────────
+# Reference: docs/api/API_STANDARDS.md §18 (API Versioning)
+springdoc:
+  api-docs:
+    path: /api-docs
+    enabled: true
+  swagger-ui:
+    path: /swagger-ui.html
+    enabled: true
+    operations-sorter: method
+    tags-sorter: alpha
+    display-request-duration: true
+    try-it-out-enabled: true
+  info:
+    title: DevFlow API
+    description: >
+      DevFlow — AI-First Engineering Intelligence & Delivery Platform REST API.
+      All endpoints follow the standards defined in docs/api/API_STANDARDS.md.
+    version: v1
+    contact:
+      name: DevFlow Platform Team
+
+# ── Logging ───────────────────────────────────────────────────────────────────
+# Reference: docs/observability/LOGGING_STRATEGY.md
+logging:
+  pattern:
+    # Structured log format: level, timestamp, traceId, spanId, logger, message
+    console: "%d{yyyy-MM-dd'T'HH:mm:ss.SSSZ} [%thread] %-5level [%X{traceId}/%X{spanId}] %logger{36} - %msg%n"
+  level:
+    root: INFO
+    com.devflow: INFO
+    org.springframework: WARN
+    org.hibernate: WARN
+    org.flywaydb: INFO
