@@ -77,6 +77,9 @@ class SecurityConfigurationTest {
     @MockBean
     private UserRepository userRepository;
 
+    @MockBean
+    private com.devflow.auth.service.AuthenticationService authenticationService;
+
     // ── Public endpoint tests ─────────────────────────────────────────────────
 
     @Nested

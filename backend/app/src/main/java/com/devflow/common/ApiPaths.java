@@ -38,6 +38,13 @@ public final class ApiPaths {
     /** SpringDoc Swagger UI entry-point HTML. */
     public static final String SWAGGER_UI_HTML = "/swagger-ui.html";
 
+    // ── Authentication ────────────────────────────────────────────────────────
+
+    public static final String AUTH_REGISTER = API_V1 + "/auth/register";
+    public static final String AUTH_LOGIN = API_V1 + "/auth/login";
+    public static final String AUTH_REFRESH = API_V1 + "/auth/refresh";
+    public static final String AUTH_LOGOUT = API_V1 + "/auth/logout";
+
     // ── Consolidated permit list ──────────────────────────────────────────────
 
     /**
@@ -52,5 +59,9 @@ public final class ApiPaths {
         OPEN_API_DOCS,
         SWAGGER_UI,
         SWAGGER_UI_HTML,
+        AUTH_REGISTER,
+        AUTH_LOGIN,
+        AUTH_REFRESH,
+        AUTH_LOGOUT
     };
 }
