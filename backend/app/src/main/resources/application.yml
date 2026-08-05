@@ -166,13 +166,15 @@ logging:
 devflow:
   security:
     jwt:
+      # Signing secret key (minimum 512 bits / 64 characters for HS512 HMAC signing).
+      # Environment variable DEVFLOW_JWT_SECRET overrides this default.
+      secret: ${DEVFLOW_JWT_SECRET:404E635266556A586E3272357538782F413F4428472B4B6250645367566B5970337336763979244226452948404D635166546A576E5A7234753778214125442A}
       # Issuer claim (iss) embedded in every access token.
-      # Must match the value validated by the JWT filter (implemented in next phase).
       issuer: devflow-backend
-      # Access token lifetime: 15 minutes per Authentication Strategy §5.2
-      access-token-expiry-seconds: 900
-      # Refresh token lifetime: 7 days per Authentication Strategy §6.2
-      refresh-token-expiry-seconds: 604800
+      # Access token lifetime: 15 minutes (900,000 milliseconds) per Authentication Strategy §5.2
+      access-token-expiration: 900000
+      # Refresh token lifetime: 7 days (604,800,000 milliseconds) per Authentication Strategy §6.2
+      refresh-token-expiration: 604800000
     cors:
       # allowed-origins is intentionally empty in the base configuration.
       # Each environment MUST provide its own explicit list via its profile YAML.

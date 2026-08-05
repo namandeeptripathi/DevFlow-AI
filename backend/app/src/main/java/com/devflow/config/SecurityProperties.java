@@ -70,28 +70,21 @@ public class SecurityProperties {
      */
     public static class Jwt {
 
-        /**
-         * Value of the {@code iss} (issuer) claim embedded in every access token.
-         * Must match the value used by JWT validation logic in the auth filter.
-         */
-        @NotBlank
-        private String issuer;
+        private String secret;
 
-        /**
-         * Access token lifetime in seconds.
-         * Default: 900 seconds (15 minutes) per Authentication Strategy §5.2.
-         * Minimum: 60 seconds to prevent effectively non-functional tokens.
-         */
-        @Min(60)
-        private int accessTokenExpirySeconds;
+        private String issuer = "devflow-backend";
 
-        /**
-         * Refresh token lifetime in seconds.
-         * Default: 604800 seconds (7 days) per Authentication Strategy §6.2.
-         * Minimum: 3600 seconds (1 hour) to ensure usable session lifetime.
-         */
-        @Min(3600)
-        private int refreshTokenExpirySeconds;
+        private long accessTokenExpiration = 900000L;
+
+        private long refreshTokenExpiration = 604800000L;
+
+        public String getSecret() {
+            return secret;
+        }
+
+        public void setSecret(String secret) {
+            this.secret = secret;
+        }
 
         public String getIssuer() {
             return issuer;
@@ -101,20 +94,20 @@ public class SecurityProperties {
             this.issuer = issuer;
         }
 
-        public int getAccessTokenExpirySeconds() {
-            return accessTokenExpirySeconds;
+        public long getAccessTokenExpiration() {
+            return accessTokenExpiration;
         }
 
-        public void setAccessTokenExpirySeconds(int accessTokenExpirySeconds) {
-            this.accessTokenExpirySeconds = accessTokenExpirySeconds;
+        public void setAccessTokenExpiration(long accessTokenExpiration) {
+            this.accessTokenExpiration = accessTokenExpiration;
         }
 
-        public int getRefreshTokenExpirySeconds() {
-            return refreshTokenExpirySeconds;
+        public long getRefreshTokenExpiration() {
+            return refreshTokenExpiration;
         }
 
-        public void setRefreshTokenExpirySeconds(int refreshTokenExpirySeconds) {
-            this.refreshTokenExpirySeconds = refreshTokenExpirySeconds;
+        public void setRefreshTokenExpiration(long refreshTokenExpiration) {
+            this.refreshTokenExpiration = refreshTokenExpiration;
         }
     }
 

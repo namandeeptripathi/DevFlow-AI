@@ -39,6 +39,11 @@ dependencies {
     implementation(libs.spring.boot.starter.actuator)
     implementation(libs.spring.boot.starter.data.redis)
 
+    // ── Security & JWT ────────────────────────────────────────────────────────
+    implementation(libs.jjwt.api)
+    runtimeOnly(libs.jjwt.impl)
+    runtimeOnly(libs.jjwt.jackson)
+
     // ── Database ──────────────────────────────────────────────────────────────
     runtimeOnly(libs.postgresql)
     implementation(libs.flyway.core)

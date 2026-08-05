@@ -2,6 +2,8 @@ package com.devflow.security;
 
 import com.devflow.common.ApiPaths;
 import com.devflow.config.SecurityProperties;
+import com.devflow.security.jwt.JwtAuthenticationEntryPoint;
+import com.devflow.security.jwt.JwtAuthenticationFilter;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.http.HttpStatus;
@@ -67,9 +69,17 @@ import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
 public class SecurityConfiguration {
 
     private final SecurityProperties securityProperties;
+    private final JwtAuthenticationFilter jwtAuthenticationFilter;
+    private final JwtAuthenticationEntryPoint jwtAuthenticationEntryPoint;
 
-    public SecurityConfiguration(SecurityProperties securityProperties) {
+    public SecurityConfiguration(
+            SecurityProperties securityProperties,
+            JwtAuthenticationFilter jwtAuthenticationFilter,
+            JwtAuthenticationEntryPoint jwtAuthenticationEntryPoint
+    ) {
         this.securityProperties = securityProperties;
+        this.jwtAuthenticationFilter = jwtAuthenticationFilter;
+        this.jwtAuthenticationEntryPoint = jwtAuthenticationEntryPoint;
     }
 
     /**
@@ -81,9 +91,8 @@ public class SecurityConfiguration {
      *   <li>Every other path requires a valid authenticated principal.</li>
      * </ul>
      *
-     * <p>When the JWT authentication filter is implemented, it will be registered
-     * into this filter chain via {@code .addFilterBefore(...)} without requiring
-     * structural changes to this method.
+     * <p>Validates JWT bearer tokens via {@link JwtAuthenticationFilter} and handles
+     * unauthenticated request errors using {@link JwtAuthenticationEntryPoint}.
      *
      * @param http the Spring Security {@link HttpSecurity} builder
      * @return the fully configured {@link SecurityFilterChain}
@@ -115,12 +124,13 @@ public class SecurityConfiguration {
                         .anyRequest().authenticated()
                 )
                 // ── Exception handling ─────────────────────────────────────────
-                // Return 401 Unauthorized (not 302 redirect) for unauthenticated requests.
-                // A REST API never redirects; clients are expected to handle 401 by
-                // presenting or refreshing credentials.
+                // Return 401 Unauthorized JSON response via JwtAuthenticationEntryPoint
                 .exceptionHandling(exceptions -> exceptions
-                        .authenticationEntryPoint(new HttpStatusEntryPoint(HttpStatus.UNAUTHORIZED))
+                        .authenticationEntryPoint(jwtAuthenticationEntryPoint)
                 )
+                // ── JWT Filter ────────────────────────────────────────────────
+                // Inspects Bearer token before UsernamePasswordAuthenticationFilter
+                .addFilterBefore(jwtAuthenticationFilter, org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter.class)
                 .build();
     }
 

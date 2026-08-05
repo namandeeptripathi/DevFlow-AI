@@ -29,6 +29,9 @@ springdoc-openapi = "2.8.5"
 # ── Development ───────────────────────────────────────────────────────────────
 lombok = "1.18.38"
 
+# ── Security ──────────────────────────────────────────────────────────────────
+jjwt = "0.12.6"
+
 # ── Testing ───────────────────────────────────────────────────────────────────
 testcontainers  = "1.21.4"
 mockito         = "5.18.0"
@@ -55,6 +58,11 @@ springdoc-openapi-starter-webmvc-ui = { module = "org.springdoc:springdoc-openap
 
 # ── Development ───────────────────────────────────────────────────────────────
 lombok = { module = "org.projectlombok:lombok", version.ref = "lombok" }
+
+# ── Security & JWT ────────────────────────────────────────────────────────────
+jjwt-api     = { module = "io.jsonwebtoken:jjwt-api", version.ref = "jjwt" }
+jjwt-impl    = { module = "io.jsonwebtoken:jjwt-impl", version.ref = "jjwt" }
+jjwt-jackson = { module = "io.jsonwebtoken:jjwt-jackson", version.ref = "jjwt" }
 
 # ── Testing ───────────────────────────────────────────────────────────────────
 spring-boot-starter-test           = { module = "org.springframework.boot:spring-boot-starter-test" }

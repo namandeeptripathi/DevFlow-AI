@@ -37,13 +37,30 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * <p>Uses {@code @WebMvcTest} slice testing to isolate the web and security layers
  * without initializing database connections, Flyway migrations, or Testcontainers.
  */
+import com.devflow.security.jwt.JwtAuthenticationEntryPoint;
+import com.devflow.security.jwt.JwtAuthenticationFilter;
+import com.devflow.security.jwt.JwtClaimsFactory;
+import com.devflow.security.jwt.JwtProperties;
+import com.devflow.security.jwt.JwtTokenProvider;
+import com.devflow.user.repository.UserRepository;
+import org.springframework.boot.test.mock.mockito.MockBean;
+
 @WebMvcTest
-@Import({SecurityConfiguration.class, PasswordEncoderConfiguration.class})
-@EnableConfigurationProperties(SecurityProperties.class)
+@Import({
+        SecurityConfiguration.class,
+        PasswordEncoderConfiguration.class,
+        JwtAuthenticationFilter.class,
+        JwtAuthenticationEntryPoint.class,
+        JwtTokenProvider.class,
+        JwtClaimsFactory.class,
+        com.devflow.security.user.CustomUserDetailsService.class
+})
+@EnableConfigurationProperties({SecurityProperties.class, JwtProperties.class})
 @TestPropertySource(properties = {
+        "devflow.security.jwt.secret=404E635266556A586E3272357538782F413F4428472B4B6250645367566B5970337336763979244226452948404D635166546A576E5A7234753778214125442A",
         "devflow.security.jwt.issuer=devflow-test",
-        "devflow.security.jwt.access-token-expiry-seconds=900",
-        "devflow.security.jwt.refresh-token-expiry-seconds=604800",
+        "devflow.security.jwt.access-token-expiration=900000",
+        "devflow.security.jwt.refresh-token-expiration=604800000",
         "devflow.security.cors.allowed-origins=http://localhost:3000",
         "devflow.security.cors.allowed-methods=GET,POST,PUT,DELETE,OPTIONS",
         "devflow.security.cors.allowed-headers=*",
@@ -56,6 +73,9 @@ class SecurityConfigurationTest {
 
     @Autowired
     private MockMvc mockMvc;
+
+    @MockBean
+    private UserRepository userRepository;
 
     // ── Public endpoint tests ─────────────────────────────────────────────────
 
