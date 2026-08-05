@@ -156,3 +156,44 @@ logging:
     org.springframework: WARN
     org.hibernate: WARN
     org.flywaydb: INFO
+
+# ── DevFlow Security ──────────────────────────────────────────────────────────
+# Reference: docs/security/AUTHENTICATION_STRATEGY.md
+# Reference: docs/configuration/CONFIGURATION_STRATEGY.md §2.1
+#
+# All values here are profile-agnostic defaults. Secrets (signing keys) are
+# NEVER stored here — they are loaded from the secrets manager at runtime.
+devflow:
+  security:
+    jwt:
+      # Issuer claim (iss) embedded in every access token.
+      # Must match the value validated by the JWT filter (implemented in next phase).
+      issuer: devflow-backend
+      # Access token lifetime: 15 minutes per Authentication Strategy §5.2
+      access-token-expiry-seconds: 900
+      # Refresh token lifetime: 7 days per Authentication Strategy §6.2
+      refresh-token-expiry-seconds: 604800
+    cors:
+      # allowed-origins is intentionally empty in the base configuration.
+      # Each environment MUST provide its own explicit list via its profile YAML.
+      # Rationale: Configuration Strategy §2.1 — no hardcoded environment-specific values.
+      # An empty list is secure-by-default: no cross-origin requests are permitted.
+      allowed-origins: []
+      allowed-methods:
+        - GET
+        - POST
+        - PUT
+        - PATCH
+        - DELETE
+        - OPTIONS
+      # "*" permits all request headers. Safe because allowedOrigins scopes requests
+      # to known trusted origins; wildcard headers do not expand attack surface here.
+      allowed-headers:
+        - "*"
+      # Expose X-Request-ID so clients can correlate errors with server traces.
+      # Reference: docs/api/ERROR_RESPONSE_FORMAT.md §9 (Correlation & Traceability)
+      exposed-headers:
+        - X-Request-ID
+      allow-credentials: true
+      # Preflight cache: 1 hour reduces OPTIONS round-trips in production
+      max-age-secs: 3600

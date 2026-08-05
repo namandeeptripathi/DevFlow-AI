@@ -120,3 +120,21 @@ logging:
     org.flywaydb: INFO
   # In production, configure a JSON log appender (e.g., Logstash encoder)
   # via external logback-spring.xml instead of console pattern.
+
+# ── DevFlow Security (prod overrides) ────────────────────────────────────────
+# All production security values are injected via environment variables.
+# Reference: docs/configuration/CONFIGURATION_STRATEGY.md §7 (Secret Management)
+#
+# JWT signing keys are loaded from the secrets manager at startup — never here.
+# The properties below configure non-secret security parameters.
+devflow:
+  security:
+    cors:
+      # Permitted CORS origins for production.
+      #
+      # Supply via environment variable using Spring Boot relaxed binding:
+      #   DEVFLOW_SECURITY_CORS_ALLOWED_ORIGINS=https://app.devflow.com,https://dashboard.devflow.com
+      #
+      # The env var is automatically mapped to this List<String> property.
+      # An absent or empty env var defaults to [] (no cross-origin requests) — secure by default.
+      allowed-origins: ${DEVFLOW_CORS_ALLOWED_ORIGINS:}

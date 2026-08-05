@@ -84,3 +84,14 @@ logging:
     com.devflow: INFO
     org.flywaydb: INFO
     org.testcontainers: INFO
+
+# ── DevFlow Security (test overrides) ────────────────────────────────────────
+# Security configuration for integration tests. All other security settings
+# inherit from application.yml base defaults.
+# CORS origins are required because SecurityConfiguration validates the properties
+# on startup; at least one origin must be present for the test context to load.
+devflow:
+  security:
+    cors:
+      allowed-origins:
+        - http://localhost:3000    # Test origin — mirrors dev setup for consistency

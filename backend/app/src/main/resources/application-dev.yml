@@ -85,3 +85,14 @@ logging:
     org.hibernate.SQL: DEBUG
     org.hibernate.orm.jdbc.bind: TRACE
     org.flywaydb: DEBUG
+
+# ── DevFlow Security (dev overrides) ─────────────────────────────────────────
+# CORS origins for local development. All other security settings inherit from
+# application.yml base defaults.
+# WARNING: These origins must never appear in staging or production configuration.
+devflow:
+  security:
+    cors:
+      allowed-origins:
+        - http://localhost:3000    # Next.js web application
+        - http://localhost:5173    # Vite dev server (alternative frontend setup)

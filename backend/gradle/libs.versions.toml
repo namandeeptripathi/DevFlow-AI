@@ -24,7 +24,7 @@ flyway         = "11.10.0"
 # Spring Data Redis is managed by the Spring Boot BOM
 
 # ── Documentation ─────────────────────────────────────────────────────────────
-springdoc-openapi = "3.0.3"
+springdoc-openapi = "2.8.5"
 
 # ── Development ───────────────────────────────────────────────────────────────
 lombok = "1.18.38"
