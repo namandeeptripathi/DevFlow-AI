@@ -45,6 +45,14 @@ public final class ApiPaths {
     public static final String AUTH_REFRESH = API_V1 + "/auth/refresh";
     public static final String AUTH_LOGOUT = API_V1 + "/auth/logout";
 
+    // ── User Profile ──────────────────────────────────────────────────────────
+
+    /** Base path for all user-domain endpoints. */
+    public static final String USER_BASE = API_V1 + "/users";
+
+    /** Authenticated user's own profile resource. */
+    public static final String USERS_ME = USER_BASE + "/me";
+
     // ── Consolidated permit list ──────────────────────────────────────────────
 
     /**
