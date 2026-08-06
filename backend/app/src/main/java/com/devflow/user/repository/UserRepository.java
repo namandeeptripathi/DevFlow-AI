@@ -1,7 +1,11 @@
 package com.devflow.user.repository;
 
 import com.devflow.user.domain.User;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
 import java.util.Optional;
@@ -60,4 +64,26 @@ public interface UserRepository extends JpaRepository<User, UUID> {
      * @return an {@link Optional} containing the user if found, or empty if not
      */
     Optional<User> findByEmailOrUsername(String email, String username);
+
+    /**
+     * Searches users by username or profile display name using case-insensitive partial matching.
+     * Optionally includes email matching when {@code includeEmail} is {@code true} (prepared for future RBAC).
+     *
+     * @param query the partial search term
+     * @param includeEmail whether email matching should be evaluated (false for public search)
+     * @param pageable pagination and sorting parameters
+     * @return a paged result set of matching {@link User} identities
+     */
+    @Query("""
+        SELECT DISTINCT u FROM User u
+        LEFT JOIN u.profile p
+        WHERE (LOWER(u.username) LIKE LOWER(CONCAT('%', :query, '%'))
+           OR LOWER(p.displayName) LIKE LOWER(CONCAT('%', :query, '%'))
+           OR (:includeEmail = true AND LOWER(u.email) LIKE LOWER(CONCAT('%', :query, '%'))))
+        """)
+    Page<User> searchUsers(
+            @Param("query") String query,
+            @Param("includeEmail") boolean includeEmail,
+            Pageable pageable
+    );
 }

@@ -59,6 +59,9 @@ public final class ApiPaths {
     /** Authenticated user's preferences sub-resource. */
     public static final String USERS_ME_PREFERENCES = USERS_ME + "/preferences";
 
+    /** User search endpoint. */
+    public static final String USERS_SEARCH = USER_BASE + "/search";
+
     // ── Consolidated permit list ──────────────────────────────────────────────
 
     /**

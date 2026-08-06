@@ -8,6 +8,7 @@ import com.devflow.auth.exception.UserAlreadyExistsException;
 import com.devflow.user.exception.AvatarStorageException;
 import com.devflow.user.exception.InvalidAvatarException;
 import com.devflow.user.exception.InvalidPreferencesException;
+import com.devflow.user.exception.InvalidSearchQueryException;
 import com.devflow.user.exception.UserDomainException;
 import com.devflow.user.exception.UserProfileNotFoundException;
 import com.devflow.user.exception.UserPreferencesNotFoundException;
@@ -120,6 +121,15 @@ public class GlobalExceptionHandler {
             HttpServletRequest request
     ) {
         log.warn("Invalid preferences update: {}", ex.getMessage());
+        return buildErrorResponse(HttpStatus.BAD_REQUEST, "Bad Request", ex.getMessage(), request.getRequestURI());
+    }
+
+    @ExceptionHandler(InvalidSearchQueryException.class)
+    public ResponseEntity<Map<String, Object>> handleInvalidSearchQuery(
+            InvalidSearchQueryException ex,
+            HttpServletRequest request
+    ) {
+        log.warn("Invalid search query: {}", ex.getMessage());
         return buildErrorResponse(HttpStatus.BAD_REQUEST, "Bad Request", ex.getMessage(), request.getRequestURI());
     }
 
