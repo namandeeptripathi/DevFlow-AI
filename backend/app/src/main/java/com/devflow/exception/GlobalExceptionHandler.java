@@ -7,8 +7,10 @@ import com.devflow.auth.exception.InvalidCredentialsException;
 import com.devflow.auth.exception.UserAlreadyExistsException;
 import com.devflow.user.exception.AvatarStorageException;
 import com.devflow.user.exception.InvalidAvatarException;
+import com.devflow.user.exception.InvalidPreferencesException;
 import com.devflow.user.exception.UserDomainException;
 import com.devflow.user.exception.UserProfileNotFoundException;
+import com.devflow.user.exception.UserPreferencesNotFoundException;
 import jakarta.servlet.http.HttpServletRequest;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -101,6 +103,24 @@ public class GlobalExceptionHandler {
     ) {
         log.warn("User profile not found: {}", ex.getMessage());
         return buildErrorResponse(HttpStatus.NOT_FOUND, "Not Found", ex.getMessage(), request.getRequestURI());
+    }
+
+    @ExceptionHandler(UserPreferencesNotFoundException.class)
+    public ResponseEntity<Map<String, Object>> handleUserPreferencesNotFound(
+            UserPreferencesNotFoundException ex,
+            HttpServletRequest request
+    ) {
+        log.warn("User preferences not found: {}", ex.getMessage());
+        return buildErrorResponse(HttpStatus.NOT_FOUND, "Not Found", ex.getMessage(), request.getRequestURI());
+    }
+
+    @ExceptionHandler(InvalidPreferencesException.class)
+    public ResponseEntity<Map<String, Object>> handleInvalidPreferences(
+            InvalidPreferencesException ex,
+            HttpServletRequest request
+    ) {
+        log.warn("Invalid preferences update: {}", ex.getMessage());
+        return buildErrorResponse(HttpStatus.BAD_REQUEST, "Bad Request", ex.getMessage(), request.getRequestURI());
     }
 
     @ExceptionHandler(UserDomainException.class)
