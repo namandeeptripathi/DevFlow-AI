@@ -5,6 +5,8 @@ import com.devflow.auth.exception.AuthenticationDomainException;
 import com.devflow.auth.exception.EmailNotVerifiedException;
 import com.devflow.auth.exception.InvalidCredentialsException;
 import com.devflow.auth.exception.UserAlreadyExistsException;
+import com.devflow.user.exception.UserDomainException;
+import com.devflow.user.exception.UserProfileNotFoundException;
 import jakarta.servlet.http.HttpServletRequest;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -87,6 +89,24 @@ public class GlobalExceptionHandler {
             HttpServletRequest request
     ) {
         log.warn("Authentication domain error: {}", ex.getMessage());
+        return buildErrorResponse(HttpStatus.BAD_REQUEST, "Bad Request", ex.getMessage(), request.getRequestURI());
+    }
+
+    @ExceptionHandler(UserProfileNotFoundException.class)
+    public ResponseEntity<Map<String, Object>> handleUserProfileNotFound(
+            UserProfileNotFoundException ex,
+            HttpServletRequest request
+    ) {
+        log.warn("User profile not found: {}", ex.getMessage());
+        return buildErrorResponse(HttpStatus.NOT_FOUND, "Not Found", ex.getMessage(), request.getRequestURI());
+    }
+
+    @ExceptionHandler(UserDomainException.class)
+    public ResponseEntity<Map<String, Object>> handleUserDomainException(
+            UserDomainException ex,
+            HttpServletRequest request
+    ) {
+        log.warn("User domain error: {}", ex.getMessage());
         return buildErrorResponse(HttpStatus.BAD_REQUEST, "Bad Request", ex.getMessage(), request.getRequestURI());
     }
 
