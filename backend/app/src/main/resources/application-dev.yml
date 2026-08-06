@@ -97,10 +97,7 @@ devflow:
         - http://localhost:3000    # Next.js web application
         - http://localhost:5173    # Vite dev server (alternative frontend setup)
 
-# ── DevFlow Avatar (dev overrides) ───────────────────────────────────────────
-# Local development avatar storage. Files are stored under the project root.
-# The base-url must match the static resource location configured above.
-# WARNING: These settings must never appear in production configuration.
+  # ── DevFlow Avatar (dev overrides) ───────────────────────────────────────────
   avatar:
     upload-dir: ./uploads/avatars
     base-url: http://localhost:8080/uploads/avatars

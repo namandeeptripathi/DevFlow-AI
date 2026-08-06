@@ -24,7 +24,7 @@ spring:
   # and password at test runtime. The values below are fallback defaults for
   # environments where @ServiceConnection is not used.
   datasource:
-    url: jdbc:h2:mem:devflow_test;MODE=PostgreSQL;DATABASE_TO_LOWER=TRUE;DEFAULT_NULL_ORDERING=HIGH;DB_CLOSE_DELAY=-1
+    url: jdbc:h2:mem:devflow_test;MODE=PostgreSQL;DATABASE_TO_LOWER=TRUE;DEFAULT_NULL_ORDERING=HIGH;DB_CLOSE_DELAY=-1;INIT=CREATE DOMAIN IF NOT EXISTS JSONB AS JSON
     username: sa
     password:
     driver-class-name: org.h2.Driver

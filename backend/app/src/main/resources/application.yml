@@ -200,11 +200,10 @@ devflow:
       # Preflight cache: 1 hour reduces OPTIONS round-trips in production
       max-age-secs: 3600
 
-# ── DevFlow Avatar ────────────────────────────────────────────────────────────
-# Avatar file management configuration.
-# Storage backend: LocalAvatarStorageService (filesystem).
-# Override uploadDir and baseUrl per environment via env vars or profile YAML.
-devflow:
+  # ── DevFlow Avatar ────────────────────────────────────────────────────────────
+  # Avatar file management configuration.
+  # Storage backend: LocalAvatarStorageService (filesystem).
+  # Override uploadDir and baseUrl per environment via env vars or profile YAML.
   avatar:
     # Filesystem path where avatar files are stored.
     # Override: DEVFLOW_AVATAR_UPLOAD_DIR
