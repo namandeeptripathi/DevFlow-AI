@@ -1,15 +1,18 @@
 package com.devflow.user.domain;
 
 import com.fasterxml.jackson.annotation.JsonIgnore;
+import jakarta.persistence.CascadeType;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.EntityListeners;
 import jakarta.persistence.EnumType;
 import jakarta.persistence.Enumerated;
+import jakarta.persistence.FetchType;
 import jakarta.persistence.GeneratedValue;
 import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
 import jakarta.persistence.Index;
+import jakarta.persistence.OneToOne;
 import jakarta.persistence.Table;
 import jakarta.persistence.UniqueConstraint;
 import jakarta.persistence.Version;
@@ -112,6 +115,30 @@ public class User implements Serializable {
 
     @Column(name = "last_login_at")
     private Instant lastLoginAt;
+
+    /**
+     * The public-facing profile for this user.
+     *
+     * <p>Inverse (non-owning) side of the One-to-One relationship; the foreign key
+     * resides in the {@code user_profiles} table. {@link CascadeType#ALL} and
+     * {@code orphanRemoval = true} ensure the profile is persisted and removed
+     * in lockstep with this {@link User}.
+     */
+    @OneToOne(mappedBy = "user", cascade = CascadeType.ALL, fetch = FetchType.LAZY, orphanRemoval = true)
+    @ToString.Exclude
+    private UserProfile profile;
+
+    /**
+     * The personalisation preferences for this user.
+     *
+     * <p>Inverse (non-owning) side of the One-to-One relationship; the foreign key
+     * resides in the {@code user_preferences} table. {@link CascadeType#ALL} and
+     * {@code orphanRemoval = true} ensure preferences are persisted and removed
+     * in lockstep with this {@link User}.
+     */
+    @OneToOne(mappedBy = "user", cascade = CascadeType.ALL, fetch = FetchType.LAZY, orphanRemoval = true)
+    @ToString.Exclude
+    private UserPreferences preferences;
 
     @CreatedDate
     @Column(name = "created_at", nullable = false, updatable = false)
