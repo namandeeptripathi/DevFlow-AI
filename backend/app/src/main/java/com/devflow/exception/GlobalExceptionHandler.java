@@ -5,6 +5,8 @@ import com.devflow.auth.exception.AuthenticationDomainException;
 import com.devflow.auth.exception.EmailNotVerifiedException;
 import com.devflow.auth.exception.InvalidCredentialsException;
 import com.devflow.auth.exception.UserAlreadyExistsException;
+import com.devflow.user.exception.AvatarStorageException;
+import com.devflow.user.exception.InvalidAvatarException;
 import com.devflow.user.exception.UserDomainException;
 import com.devflow.user.exception.UserProfileNotFoundException;
 import jakarta.servlet.http.HttpServletRequest;
@@ -108,6 +110,25 @@ public class GlobalExceptionHandler {
     ) {
         log.warn("User domain error: {}", ex.getMessage());
         return buildErrorResponse(HttpStatus.BAD_REQUEST, "Bad Request", ex.getMessage(), request.getRequestURI());
+    }
+
+    @ExceptionHandler(InvalidAvatarException.class)
+    public ResponseEntity<Map<String, Object>> handleInvalidAvatar(
+            InvalidAvatarException ex,
+            HttpServletRequest request
+    ) {
+        log.warn("Invalid avatar upload: {}", ex.getMessage());
+        return buildErrorResponse(HttpStatus.BAD_REQUEST, "Bad Request", ex.getMessage(), request.getRequestURI());
+    }
+
+    @ExceptionHandler(AvatarStorageException.class)
+    public ResponseEntity<Map<String, Object>> handleAvatarStorageException(
+            AvatarStorageException ex,
+            HttpServletRequest request
+    ) {
+        log.error("Avatar storage failure: {}", ex.getMessage(), ex);
+        return buildErrorResponse(HttpStatus.INTERNAL_SERVER_ERROR, "Internal Server Error",
+                "Avatar storage operation failed. Please try again later.", request.getRequestURI());
     }
 
     private ResponseEntity<Map<String, Object>> buildErrorResponse(

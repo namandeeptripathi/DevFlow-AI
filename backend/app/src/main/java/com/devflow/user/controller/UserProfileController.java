@@ -4,6 +4,7 @@ import com.devflow.security.user.DevFlowUserDetails;
 import com.devflow.user.domain.UserProfile;
 import com.devflow.user.dto.UpdateUserProfileRequest;
 import com.devflow.user.dto.UserProfileResponse;
+import com.devflow.user.service.AvatarService;
 import com.devflow.user.service.UpdateProfileRequest;
 import com.devflow.user.service.UserProfileService;
 import io.swagger.v3.oas.annotations.Operation;
@@ -14,13 +15,18 @@ import io.swagger.v3.oas.annotations.responses.ApiResponses;
 import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PatchMapping;
+import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.multipart.MultipartFile;
 
 import java.util.Objects;
 
@@ -51,10 +57,16 @@ import java.util.Objects;
 public class UserProfileController {
 
     private final UserProfileService userProfileService;
+    private final AvatarService avatarService;
 
-    public UserProfileController(UserProfileService userProfileService) {
+    public UserProfileController(
+            UserProfileService userProfileService,
+            AvatarService avatarService
+    ) {
         this.userProfileService = Objects.requireNonNull(
                 userProfileService, "userProfileService must not be null");
+        this.avatarService = Objects.requireNonNull(
+                avatarService, "avatarService must not be null");
     }
 
     /**
@@ -122,6 +134,75 @@ public class UserProfileController {
         UpdateProfileRequest command = toCommand(request);
         UserProfile updated = userProfileService.updateProfile(userDetails.getId(), command);
         return ResponseEntity.ok(toResponse(updated));
+    }
+
+    /**
+     * Uploads or replaces the authenticated user's avatar.
+     *
+     * <p>Accepts a single image file via {@code multipart/form-data}.
+     * Accepted formats: JPEG, PNG, GIF, WebP. Maximum size: 5 MB.
+     * If an avatar already exists it is replaced and the previous file is removed.
+     *
+     * @param userDetails the authenticated principal
+     * @param file        the avatar image file
+     * @return {@link ResponseEntity} containing HTTP 200 OK and the updated {@link UserProfileResponse}
+     */
+    @PostMapping(value = "/me/avatar", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    @Operation(
+        summary = "Upload or replace avatar",
+        description = """
+                Uploads a new avatar image for the authenticated user. \
+                Accepted formats: JPEG, PNG, GIF, WebP. Maximum size: 5 MB. \
+                If an avatar already exists it is replaced atomically and the previous file is removed.\
+                """,
+        security = @SecurityRequirement(name = "bearerAuth")
+    )
+    @ApiResponses(value = {
+        @ApiResponse(responseCode = "200", description = "Avatar uploaded successfully",
+            content = @Content(schema = @Schema(implementation = UserProfileResponse.class))),
+        @ApiResponse(responseCode = "400", description = "Invalid file — unsupported type, exceeds 5 MB, or empty",
+            content = @Content),
+        @ApiResponse(responseCode = "401", description = "Unauthorized — valid Bearer token required",
+            content = @Content),
+        @ApiResponse(responseCode = "404", description = "Profile not found for the authenticated user",
+            content = @Content)
+    })
+    public ResponseEntity<UserProfileResponse> uploadAvatar(
+            @AuthenticationPrincipal DevFlowUserDetails userDetails,
+            @RequestParam("file") MultipartFile file
+    ) {
+        UserProfile updated = avatarService.uploadAvatar(userDetails.getId(), file);
+        return ResponseEntity.ok(toResponse(updated));
+    }
+
+    /**
+     * Removes the authenticated user's avatar.
+     *
+     * <p>Deletes the avatar file from storage and clears {@code avatarUrl} on the profile.
+     * If no avatar is currently set the call succeeds silently.
+     *
+     * @param userDetails the authenticated principal
+     * @return {@link ResponseEntity} containing HTTP 204 No Content
+     */
+    @DeleteMapping("/me/avatar")
+    @Operation(
+        summary = "Delete avatar",
+        description = "Removes the authenticated user's avatar image. No-op if no avatar is currently set.",
+        security = @SecurityRequirement(name = "bearerAuth")
+    )
+    @ApiResponses(value = {
+        @ApiResponse(responseCode = "204", description = "Avatar deleted successfully",
+            content = @Content),
+        @ApiResponse(responseCode = "401", description = "Unauthorized — valid Bearer token required",
+            content = @Content),
+        @ApiResponse(responseCode = "404", description = "Profile not found for the authenticated user",
+            content = @Content)
+    })
+    public ResponseEntity<Void> deleteAvatar(
+            @AuthenticationPrincipal DevFlowUserDetails userDetails
+    ) {
+        avatarService.deleteAvatar(userDetails.getId());
+        return ResponseEntity.noContent().build();
     }
 
     // ── Private mapping helpers ───────────────────────────────────────────────

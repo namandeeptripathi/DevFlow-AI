@@ -53,6 +53,9 @@ public final class ApiPaths {
     /** Authenticated user's own profile resource. */
     public static final String USERS_ME = USER_BASE + "/me";
 
+    /** Authenticated user's avatar sub-resource. */
+    public static final String USERS_ME_AVATAR = USERS_ME + "/avatar";
+
     // ── Consolidated permit list ──────────────────────────────────────────────
 
     /**

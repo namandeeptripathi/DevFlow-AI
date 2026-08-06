@@ -199,3 +199,26 @@ devflow:
       allow-credentials: true
       # Preflight cache: 1 hour reduces OPTIONS round-trips in production
       max-age-secs: 3600
+
+# ── DevFlow Avatar ────────────────────────────────────────────────────────────
+# Avatar file management configuration.
+# Storage backend: LocalAvatarStorageService (filesystem).
+# Override uploadDir and baseUrl per environment via env vars or profile YAML.
+devflow:
+  avatar:
+    # Filesystem path where avatar files are stored.
+    # Override: DEVFLOW_AVATAR_UPLOAD_DIR
+    upload-dir: ${DEVFLOW_AVATAR_UPLOAD_DIR:./uploads/avatars}
+    # Base URL prepended to the stored filename in UserProfile.avatarUrl.
+    # In production, point this to your CDN or static file server origin.
+    # Override: DEVFLOW_AVATAR_BASE_URL
+    base-url: ${DEVFLOW_AVATAR_BASE_URL:http://localhost:8080/uploads/avatars}
+    # Maximum permitted file size in bytes. Default: 5 MB (5 * 1024 * 1024).
+    # Override: DEVFLOW_AVATAR_MAX_SIZE_BYTES
+    max-size-bytes: ${DEVFLOW_AVATAR_MAX_SIZE_BYTES:5242880}
+    # MIME types accepted for upload. Only these content types pass validation.
+    allowed-content-types:
+      - image/jpeg
+      - image/png
+      - image/gif
+      - image/webp
