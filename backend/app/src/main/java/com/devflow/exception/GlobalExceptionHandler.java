@@ -9,6 +9,10 @@ import com.devflow.organization.exception.LastOrganizationOwnerRemovalException;
 import com.devflow.organization.exception.OrganizationAccessDeniedException;
 import com.devflow.organization.exception.OrganizationAlreadyExistsException;
 import com.devflow.organization.exception.OrganizationDomainException;
+import com.devflow.organization.exception.OrganizationInvitationAlreadyExistsException;
+import com.devflow.organization.exception.OrganizationInvitationAlreadyProcessedException;
+import com.devflow.organization.exception.OrganizationInvitationExpiredException;
+import com.devflow.organization.exception.OrganizationInvitationNotFoundException;
 import com.devflow.organization.exception.OrganizationMemberAlreadyExistsException;
 import com.devflow.organization.exception.OrganizationMemberNotFoundException;
 import com.devflow.organization.exception.OrganizationMembershipRequiredException;
@@ -241,6 +245,42 @@ public class GlobalExceptionHandler {
     ) {
         log.warn("Organization membership required: {}", ex.getMessage());
         return buildErrorResponse(HttpStatus.FORBIDDEN, "Forbidden", ex.getMessage(), request.getRequestURI());
+    }
+
+    @ExceptionHandler(OrganizationInvitationNotFoundException.class)
+    public ResponseEntity<Map<String, Object>> handleOrganizationInvitationNotFound(
+            OrganizationInvitationNotFoundException ex,
+            HttpServletRequest request
+    ) {
+        log.warn("Organization invitation not found: {}", ex.getMessage());
+        return buildErrorResponse(HttpStatus.NOT_FOUND, "Not Found", ex.getMessage(), request.getRequestURI());
+    }
+
+    @ExceptionHandler(OrganizationInvitationAlreadyExistsException.class)
+    public ResponseEntity<Map<String, Object>> handleOrganizationInvitationAlreadyExists(
+            OrganizationInvitationAlreadyExistsException ex,
+            HttpServletRequest request
+    ) {
+        log.warn("Organization invitation conflict: {}", ex.getMessage());
+        return buildErrorResponse(HttpStatus.CONFLICT, "Conflict", ex.getMessage(), request.getRequestURI());
+    }
+
+    @ExceptionHandler(OrganizationInvitationExpiredException.class)
+    public ResponseEntity<Map<String, Object>> handleOrganizationInvitationExpired(
+            OrganizationInvitationExpiredException ex,
+            HttpServletRequest request
+    ) {
+        log.warn("Organization invitation expired: {}", ex.getMessage());
+        return buildErrorResponse(HttpStatus.BAD_REQUEST, "Bad Request", ex.getMessage(), request.getRequestURI());
+    }
+
+    @ExceptionHandler(OrganizationInvitationAlreadyProcessedException.class)
+    public ResponseEntity<Map<String, Object>> handleOrganizationInvitationAlreadyProcessed(
+            OrganizationInvitationAlreadyProcessedException ex,
+            HttpServletRequest request
+    ) {
+        log.warn("Organization invitation already processed: {}", ex.getMessage());
+        return buildErrorResponse(HttpStatus.BAD_REQUEST, "Bad Request", ex.getMessage(), request.getRequestURI());
     }
 
     private ResponseEntity<Map<String, Object>> buildErrorResponse(

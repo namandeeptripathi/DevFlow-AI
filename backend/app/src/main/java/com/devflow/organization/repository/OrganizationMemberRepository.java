@@ -17,10 +17,33 @@ import java.util.UUID;
  * <p>Provides tenant-scoped data access operations for managing user memberships within
  * organizations, querying member lists, and validating role constraints.
  *
+ * <h2>Multi-Tenant Security Guideline</h2>
+ * <p>When fetching or mutating membership records by entity ID within organization scope,
+ * developers MUST use tenant-scoped methods (e.g., {@link #findByIdAndOrganizationId(UUID, UUID)})
+ * rather than top-level {@code findById(UUID)} to guarantee tenant isolation and prevent cross-tenant data leaks.
+ *
  * @see OrganizationMember
  */
 @Repository
 public interface OrganizationMemberRepository extends JpaRepository<OrganizationMember, UUID> {
+
+    /**
+     * Finds a membership record by ID within a specific organization boundary.
+     *
+     * @param id the UUID of the member record
+     * @param organizationId the UUID of the owning organization
+     * @return an {@link Optional} containing the member if found within the tenant, or empty if not
+     */
+    Optional<OrganizationMember> findByIdAndOrganizationId(UUID id, UUID organizationId);
+
+    /**
+     * Checks if a membership record exists by ID within a specific organization boundary.
+     *
+     * @param id the UUID of the member record
+     * @param organizationId the UUID of the owning organization
+     * @return {@code true} if the member exists within the tenant; {@code false} otherwise
+     */
+    boolean existsByIdAndOrganizationId(UUID id, UUID organizationId);
 
     /**
      * Finds a membership record for a specific organization and user.
