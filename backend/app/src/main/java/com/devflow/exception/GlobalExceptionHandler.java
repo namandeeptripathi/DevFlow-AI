@@ -6,10 +6,12 @@ import com.devflow.auth.exception.EmailNotVerifiedException;
 import com.devflow.auth.exception.InvalidCredentialsException;
 import com.devflow.auth.exception.UserAlreadyExistsException;
 import com.devflow.organization.exception.LastOrganizationOwnerRemovalException;
+import com.devflow.organization.exception.OrganizationAccessDeniedException;
 import com.devflow.organization.exception.OrganizationAlreadyExistsException;
 import com.devflow.organization.exception.OrganizationDomainException;
 import com.devflow.organization.exception.OrganizationMemberAlreadyExistsException;
 import com.devflow.organization.exception.OrganizationMemberNotFoundException;
+import com.devflow.organization.exception.OrganizationMembershipRequiredException;
 import com.devflow.organization.exception.OrganizationNotFoundException;
 import com.devflow.user.exception.AvatarStorageException;
 import com.devflow.user.exception.InvalidAvatarException;
@@ -221,6 +223,24 @@ public class GlobalExceptionHandler {
     ) {
         log.warn("Last organization owner removal rejected: {}", ex.getMessage());
         return buildErrorResponse(HttpStatus.BAD_REQUEST, "Bad Request", ex.getMessage(), request.getRequestURI());
+    }
+
+    @ExceptionHandler(OrganizationAccessDeniedException.class)
+    public ResponseEntity<Map<String, Object>> handleOrganizationAccessDenied(
+            OrganizationAccessDeniedException ex,
+            HttpServletRequest request
+    ) {
+        log.warn("Organization access denied: {}", ex.getMessage());
+        return buildErrorResponse(HttpStatus.FORBIDDEN, "Forbidden", ex.getMessage(), request.getRequestURI());
+    }
+
+    @ExceptionHandler(OrganizationMembershipRequiredException.class)
+    public ResponseEntity<Map<String, Object>> handleOrganizationMembershipRequired(
+            OrganizationMembershipRequiredException ex,
+            HttpServletRequest request
+    ) {
+        log.warn("Organization membership required: {}", ex.getMessage());
+        return buildErrorResponse(HttpStatus.FORBIDDEN, "Forbidden", ex.getMessage(), request.getRequestURI());
     }
 
     private ResponseEntity<Map<String, Object>> buildErrorResponse(
