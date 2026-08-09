@@ -1,8 +1,12 @@
 package com.devflow.organization.service;
 
 import com.devflow.organization.domain.Organization;
+import com.devflow.organization.domain.OrganizationMember;
+import com.devflow.organization.domain.OrganizationMembershipStatus;
+import com.devflow.organization.domain.OrganizationRole;
 import com.devflow.organization.exception.OrganizationAlreadyExistsException;
 import com.devflow.organization.exception.OrganizationNotFoundException;
+import com.devflow.organization.repository.OrganizationMemberRepository;
 import com.devflow.organization.repository.OrganizationRepository;
 import com.devflow.user.domain.User;
 import com.devflow.user.repository.UserRepository;
@@ -11,6 +15,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.Instant;
 import java.util.Objects;
 import java.util.UUID;
 
@@ -19,7 +24,7 @@ import java.util.UUID;
  *
  * <h2>Responsibilities</h2>
  * <ul>
- *   <li>Create a new organization with slug-uniqueness enforcement.</li>
+ *   <li>Create a new organization with slug-uniqueness enforcement and atomic owner membership.</li>
  *   <li>Retrieve organizations by ID or slug.</li>
  *   <li>Apply validated updates to mutable organization fields.</li>
  *   <li>Delete an organization by ID.</li>
@@ -27,12 +32,9 @@ import java.util.UUID;
  *
  * <h2>Architectural Boundaries</h2>
  * <ul>
- *   <li>This service does not manage memberships, invitations, or RBAC — those will be
- *       introduced in dedicated stages.</li>
  *   <li>Slug is treated as immutable after creation; update operations explicitly
  *       prevent slug modification to preserve URL stability.</li>
- *   <li>Owner validation delegates to {@link UserRepository} to confirm the user exists;
- *       authorization checks are outside this service's scope.</li>
+ *   <li>Owner validation delegates to {@link UserRepository} to confirm the user exists.</li>
  *   <li>Audit fields ({@code createdAt}, {@code updatedAt}) are managed automatically by
  *       {@link org.springframework.data.jpa.domain.support.AuditingEntityListener}.</li>
  *   <li>Constructor injection only — no field injection.</li>
@@ -40,6 +42,7 @@ import java.util.UUID;
  *
  * @see Organization
  * @see OrganizationRepository
+ * @see OrganizationMemberRepository
  * @see OrganizationNotFoundException
  * @see OrganizationAlreadyExistsException
  */
@@ -49,14 +52,18 @@ public class OrganizationService {
     private static final Logger log = LoggerFactory.getLogger(OrganizationService.class);
 
     private final OrganizationRepository organizationRepository;
+    private final OrganizationMemberRepository organizationMemberRepository;
     private final UserRepository userRepository;
 
     public OrganizationService(
             OrganizationRepository organizationRepository,
+            OrganizationMemberRepository organizationMemberRepository,
             UserRepository userRepository
     ) {
         this.organizationRepository = Objects.requireNonNull(
                 organizationRepository, "organizationRepository must not be null");
+        this.organizationMemberRepository = Objects.requireNonNull(
+                organizationMemberRepository, "organizationMemberRepository must not be null");
         this.userRepository = Objects.requireNonNull(
                 userRepository, "userRepository must not be null");
     }
@@ -65,11 +72,13 @@ public class OrganizationService {
 
     /**
      * Creates a new organization with the specified name, slug, description, and owner.
+     * Automatically persists the founding user as an {@link OrganizationRole#OWNER} member.
      *
      * <p>Business rules enforced:
      * <ul>
      *   <li>The slug must be globally unique across all organizations.</li>
      *   <li>The owner must be an existing, persisted user.</li>
+     *   <li>The owner is atomically granted an active {@link OrganizationRole#OWNER} membership.</li>
      * </ul>
      *
      * @param name        the display name of the organization
@@ -79,8 +88,6 @@ public class OrganizationService {
      * @return the persisted {@link Organization} entity
      * @throws OrganizationAlreadyExistsException if the slug is already in use
      * @throws OrganizationNotFoundException      if the owner user ID does not exist
-     *         (using a semantically accurate exception is deferred until a generic
-     *         user-not-found exception exists in the platform)
      */
     @Transactional
     public Organization createOrganization(String name, String slug, String description, UUID ownerId) {
@@ -111,7 +118,18 @@ public class OrganizationService {
                 .build();
 
         Organization saved = organizationRepository.save(organization);
-        log.info("Created organization [{}] with slug [{}] owned by user [{}]",
+
+        OrganizationMember ownerMember = OrganizationMember.builder()
+                .organization(saved)
+                .user(owner)
+                .role(OrganizationRole.OWNER)
+                .status(OrganizationMembershipStatus.ACTIVE)
+                .joinedAt(Instant.now())
+                .build();
+
+        organizationMemberRepository.save(ownerMember);
+
+        log.info("Created organization [{}] with slug [{}] and initial OWNER member [{}]",
                 saved.getId(), saved.getSlug(), ownerId);
         return saved;
     }

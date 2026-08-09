@@ -5,8 +5,11 @@ import com.devflow.auth.exception.AuthenticationDomainException;
 import com.devflow.auth.exception.EmailNotVerifiedException;
 import com.devflow.auth.exception.InvalidCredentialsException;
 import com.devflow.auth.exception.UserAlreadyExistsException;
+import com.devflow.organization.exception.LastOrganizationOwnerRemovalException;
 import com.devflow.organization.exception.OrganizationAlreadyExistsException;
 import com.devflow.organization.exception.OrganizationDomainException;
+import com.devflow.organization.exception.OrganizationMemberAlreadyExistsException;
+import com.devflow.organization.exception.OrganizationMemberNotFoundException;
 import com.devflow.organization.exception.OrganizationNotFoundException;
 import com.devflow.user.exception.AvatarStorageException;
 import com.devflow.user.exception.InvalidAvatarException;
@@ -190,6 +193,33 @@ public class GlobalExceptionHandler {
             HttpServletRequest request
     ) {
         log.warn("Organization domain error: {}", ex.getMessage());
+        return buildErrorResponse(HttpStatus.BAD_REQUEST, "Bad Request", ex.getMessage(), request.getRequestURI());
+    }
+
+    @ExceptionHandler(OrganizationMemberNotFoundException.class)
+    public ResponseEntity<Map<String, Object>> handleOrganizationMemberNotFound(
+            OrganizationMemberNotFoundException ex,
+            HttpServletRequest request
+    ) {
+        log.warn("Organization member not found: {}", ex.getMessage());
+        return buildErrorResponse(HttpStatus.NOT_FOUND, "Not Found", ex.getMessage(), request.getRequestURI());
+    }
+
+    @ExceptionHandler(OrganizationMemberAlreadyExistsException.class)
+    public ResponseEntity<Map<String, Object>> handleOrganizationMemberAlreadyExists(
+            OrganizationMemberAlreadyExistsException ex,
+            HttpServletRequest request
+    ) {
+        log.warn("Organization member conflict: {}", ex.getMessage());
+        return buildErrorResponse(HttpStatus.CONFLICT, "Conflict", ex.getMessage(), request.getRequestURI());
+    }
+
+    @ExceptionHandler(LastOrganizationOwnerRemovalException.class)
+    public ResponseEntity<Map<String, Object>> handleLastOrganizationOwnerRemoval(
+            LastOrganizationOwnerRemovalException ex,
+            HttpServletRequest request
+    ) {
+        log.warn("Last organization owner removal rejected: {}", ex.getMessage());
         return buildErrorResponse(HttpStatus.BAD_REQUEST, "Bad Request", ex.getMessage(), request.getRequestURI());
     }
 
