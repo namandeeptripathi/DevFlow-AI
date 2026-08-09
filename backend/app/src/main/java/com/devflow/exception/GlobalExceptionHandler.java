@@ -5,6 +5,9 @@ import com.devflow.auth.exception.AuthenticationDomainException;
 import com.devflow.auth.exception.EmailNotVerifiedException;
 import com.devflow.auth.exception.InvalidCredentialsException;
 import com.devflow.auth.exception.UserAlreadyExistsException;
+import com.devflow.organization.exception.OrganizationAlreadyExistsException;
+import com.devflow.organization.exception.OrganizationDomainException;
+import com.devflow.organization.exception.OrganizationNotFoundException;
 import com.devflow.user.exception.AvatarStorageException;
 import com.devflow.user.exception.InvalidAvatarException;
 import com.devflow.user.exception.InvalidPreferencesException;
@@ -159,6 +162,35 @@ public class GlobalExceptionHandler {
         log.error("Avatar storage failure: {}", ex.getMessage(), ex);
         return buildErrorResponse(HttpStatus.INTERNAL_SERVER_ERROR, "Internal Server Error",
                 "Avatar storage operation failed. Please try again later.", request.getRequestURI());
+    }
+
+    // ── Organization domain ───────────────────────────────────────────────────
+
+    @ExceptionHandler(OrganizationNotFoundException.class)
+    public ResponseEntity<Map<String, Object>> handleOrganizationNotFound(
+            OrganizationNotFoundException ex,
+            HttpServletRequest request
+    ) {
+        log.warn("Organization not found: {}", ex.getMessage());
+        return buildErrorResponse(HttpStatus.NOT_FOUND, "Not Found", ex.getMessage(), request.getRequestURI());
+    }
+
+    @ExceptionHandler(OrganizationAlreadyExistsException.class)
+    public ResponseEntity<Map<String, Object>> handleOrganizationAlreadyExists(
+            OrganizationAlreadyExistsException ex,
+            HttpServletRequest request
+    ) {
+        log.warn("Organization conflict: {}", ex.getMessage());
+        return buildErrorResponse(HttpStatus.CONFLICT, "Conflict", ex.getMessage(), request.getRequestURI());
+    }
+
+    @ExceptionHandler(OrganizationDomainException.class)
+    public ResponseEntity<Map<String, Object>> handleOrganizationDomainException(
+            OrganizationDomainException ex,
+            HttpServletRequest request
+    ) {
+        log.warn("Organization domain error: {}", ex.getMessage());
+        return buildErrorResponse(HttpStatus.BAD_REQUEST, "Bad Request", ex.getMessage(), request.getRequestURI());
     }
 
     private ResponseEntity<Map<String, Object>> buildErrorResponse(
