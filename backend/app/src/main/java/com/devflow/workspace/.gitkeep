@@ -1,12 +1,17 @@
-# Bootstrap package for workspace-level application concerns.
+# Package for the Workspace domain within DevFlow.
 #
-# A Workspace is the operational scope within an Organization.
-# WorkspaceMembership entities (User + Organization + Role) are
-# owned by the devflow-auth module.
+# A Workspace represents an operational department or division within an
+# Organization (e.g., Engineering, Design, Product, HR).
 #
-# This package is reserved for application-level workspace context
-# management: active workspace resolution, workspace context switching,
-# and workspace-scoped request interceptors.
+# Each Workspace belongs to exactly one Organization (Many-to-One).
+# Workspaces contain:
+#   - id (UUID)
+#   - name (String)
+#   - organization (Organization)
+#   - visibility (WorkspaceVisibility: PUBLIC, PRIVATE)
+#   - description (String, optional)
+#   - createdAt, updatedAt, version (standard audit/concurrency)
 #
 # Reference: docs/architecture/DOMAIN_MODEL.md §3.1
-# Reference: docs/security/AUTHORIZATION_MODEL.md §8.1 (Workspace Isolation Model)
+# Reference: docs/security/AUTHORIZATION_MODEL.md §4.1
+
