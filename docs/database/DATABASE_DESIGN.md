@@ -65,7 +65,7 @@ To maintain modular boundaries, the database is partitioned into nine logical **
 
 1. **`auth` Schema**
    - **Owner:** `devflow-auth` module.
-   - **Purpose:** Persists users, organization details, workspace memberships, and third-party integrations OAuth credentials.
+   - **Purpose:** Persists users, organization details, organization memberships, workspaces, and third-party integrations OAuth credentials.
    - **Isolation Rules:** Holds the core tenant and identity definitions. External modules query this schema via compile-time API interfaces (`AuthApi`) to validate access rights.
 2. **`pm` Schema**
    - **Owner:** `devflow-project-management` module.
@@ -108,7 +108,8 @@ Every Aggregate Root defined in the Domain Model maps to a primary table inside 
 
 | Bounded Context | Aggregate Root | Owning Schema | Persistence Responsibility | Lifecycle Boundary / Cascades |
 | :--- | :--- | :--- | :--- | :--- |
-| **IAM** | `Organization` | `auth` | `devflow-auth` | Core workspace boundary. Deletion cascade is blocked if active Projects or Repositories reference its ID. |
+| **IAM** | `Organization` | `auth` | `devflow-auth` | Core organization tenant boundary. Deletion cascade is blocked if active Workspaces, Projects, or Repositories reference its ID. |
+| **IAM** | `Workspace` | `auth` | `devflow-auth` | Operational workspace within an Organization. Deletion cascade is blocked if active Projects reference its ID. |
 | **IAM** | `User` | `auth` | `devflow-auth` | Deleting a User disables login credentials, with soft-deletion handling user profile details. |
 | **PM** | `Project` | `pm` | `devflow-project-management` | Project container. Deleting a Project cascades to delete boards, columns, cycles, epics, and tasks. |
 | **PM** | `Task` | `pm` | `devflow-project-management` | Standalone Aggregate. Deletion cascades to its own description edits history, but does not affect projects or boards. |

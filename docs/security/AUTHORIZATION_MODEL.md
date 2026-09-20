@@ -140,7 +140,7 @@ Authorization in DevFlow is evaluated across multiple distinct enforcement layer
 | :--- | :--- |
 | **Security Context** | The in-memory, request-scoped data structure populated once per request by the Security Filter Chain. It holds the verified principal identity (`userId`), the active tenant (`orgId`), and the coarse-grained role list embedded in the JWT. All downstream authorization checks read from this context — they never re-query the JWT. |
 | **Authorization Engine** | The logical authorization subsystem within the `devflow-auth` module. It is invoked by all other domain modules via the compiled `AuthApi` public interface. It never relies on the calling module's internal state; it evaluates decisions based on the Security Context and its own data. |
-| **Role Resolver** | Queries the `WorkspaceMembership` records for the current `(userId, orgId)` pair to determine the user's active role(s) within the current tenant. Roles embedded in the JWT serve as a fast-path cache; the Role Resolver performs fresh lookups when high-consistency decisions are required (e.g., administrative actions). |
+| **Role Resolver** | Queries the `OrganizationMember` records for the current `(userId, orgId)` pair to determine the user's active role(s) within the current tenant. Roles embedded in the JWT serve as a fast-path cache; the Role Resolver performs fresh lookups when high-consistency decisions are required (e.g., administrative actions). |
 | **Permission Evaluator** | Maps the resolved role(s) against the platform's permission registry to determine whether the specific `action:resource` combination is authorized. Returns a binary `ALLOW` or `DENY` decision. |
 | **Ownership Checker** | For operations where resource ownership grants additional or exclusive rights (e.g., project deletion, automation rule management), verifies that the requesting user is the recorded creator or owner of the resource. |
 | **Tenant Boundary Enforcer** | The first and hardest check. Validates that the `orgId` embedded in the JWT matches the `organizationId` of the resource being accessed. A mismatch results in an immediate `DENY` — no further evaluation is performed. |
@@ -211,14 +211,21 @@ DevFlow's authorization model is organized as a five-level scope hierarchy. Each
 |            platform-wide incident response                           |
 +----------------------------------+-----------------------------------+
                                    |
-                                   | (Organization is a tenant boundary)
-                                   v
+                                   | (Organization                                     v
 +----------------------------------------------------------------------+
 |                       ORGANIZATION LEVEL                             |
 |  Scope:  Single tenant — one independent engineering organization    |
-|  Actors: Organization Owners, Workspace Administrators, Members      |
+|  Actors: Organization Owners, Organization Administrators, Members   |
 |  Controls: Membership management, billing, global settings,          |
-|            project creation, integration authorization               |
+|            workspace creation, integration authorization             |
++----------------------------------+-----------------------------------+
+                                   |
+                                   v
++----------------------------------------------------------------------+
+|                        WORKSPACE LEVEL                               |
+|  Scope:  Operational division (e.g. Engineering, Design, Product, HR)|
+|  Actors: Organization Members (access gated by workspace visibility) |
+|  Controls: Workspace settings, project grouping, visibility rules    |
 +----------------------------------+-----------------------------------+
                                    |
                         +----------+----------+
@@ -242,7 +249,7 @@ DevFlow's authorization model is organized as a five-level scope hierarchy. Each
 |  Actors: Resource owners + role-permitted members                    |
 |  Controls: Ownership-gated actions, visibility rules,                |
 |            resource state-based permission gates                     |
-+----------------------------------------------------------------------+
++----------------------------------------------------------------------+-----------------------+
 ```
 
 ### 4.2 Inheritance Rules
@@ -272,7 +279,7 @@ Platform roles are assigned only to DevFlow's internal engineering and operation
 
 ### 5.2 Organization Roles
 
-Organization roles are the primary access control dimension in DevFlow. They are assigned per-organization, per-user through `WorkspaceMembership`.
+Organization roles are the primary access control dimension in DevFlow. They are assigned per-organization, per-user through `OrganizationMember`.
 
 | Role | Scope | Permissions Summary |
 | :--- | :--- | :--- |
@@ -496,9 +503,9 @@ Ownership of transferable resources (Organizations, Projects) can be transferred
 
 ## 8. Multi-Tenant Authorization
 
-### 8.1 Workspace Isolation Model
+### 8.1 Organization Isolation Model
 
-DevFlow implements **Workspace Isolation** as the primary multi-tenancy guarantee. Each organization is a fully isolated workspace — a logical boundary within which all resources, permissions, and audit events are contained.
+DevFlow implements **Organization Isolation** as the primary multi-tenancy guarantee. Each organization is a fully isolated boundary within which all workspaces, resources, permissions, and audit events are contained.
 
 ```
 +---------------------------------------------------------------------+
@@ -508,6 +515,7 @@ DevFlow implements **Workspace Isolation** as the primary multi-tenancy guarante
 |  |   ORGANIZATION A      |    |   ORGANIZATION B      |             |
 |  |   (Acme Engineering)  |    |   (Startup X)         |             |
 |  |                       |    |                       |             |
+|  |  Workspaces           |    |  Workspaces           |             |
 |  |  Users    Projects    |    |  Users    Projects    |             |
 |  |  Repos    Analytics   |    |  Repos    Analytics   |             |
 |  |  AI Data  Documents   |    |  AI Data  Documents   |             |
@@ -527,7 +535,7 @@ The tenant boundary is enforced in three independent layers:
 | Layer | Mechanism | What It Prevents |
 | :--- | :--- | :--- |
 | **JWT Claims** | The `orgId` claim in the JWT encodes the active organization. Switching organizations requires a new token issuance. | A single token cannot be used to access resources in multiple organizations. |
-| **Tenant Resolution Filter** | On every request, the `TenantResolutionFilter` validates that the JWT `orgId` maps to an active `WorkspaceMembership`. Suspended or removed memberships result in `403 Forbidden`. | Revoked members are blocked even if their JWT has not yet expired. |
+| **Tenant Resolution Filter** | On every request, the `TenantResolutionFilter` validates that the JWT `orgId` maps to an active `OrganizationMember`. Suspended or removed memberships result in `403 Forbidden`. | Revoked members are blocked even if their JWT has not yet expired. |
 | **Data Layer Scoping** | All database queries in protected modules carry a mandatory `organizationId` filter applied by Hibernate's tenant discriminator. | Even if an authorization check were bypassed at the application layer, queries would still return no data for a mismatched tenant. |
 
 ### 8.3 Cross-Tenant Prevention
@@ -541,7 +549,7 @@ Cross-tenant access is architecturally impossible through normal request paths:
 
 ### 8.4 Context Switching
 
-A user who is a member of multiple organizations holds independent `WorkspaceMembership` records for each. To operate within a different organization context, the user must explicitly switch their active organization in the web client. This triggers a token exchange that:
+A user who is a member of multiple organizations holds independent `OrganizationMember` records for each. To operate within a different organization context, the user must explicitly switch their active organization in the web client. This triggers a token exchange that:
 1. Validates the user holds an active membership in the target organization.
 2. Issues a new JWT with `orgId` set to the target organization.
 3. Updates the `roles` and `scopes` claims to reflect the user's role in the **target** organization (which may differ from their role in their previous organization).
@@ -554,8 +562,8 @@ Incoming Request          Tenant Filter           Auth Module        PostgreSQL
        |-- JWT: orgId=org_A -->|                      |                  |
        |                       |-- Query membership ->|                  |
        |                       |                      |-- SELECT from -->|
-       |                       |                      |   workspace_     |
-       |                       |                      |   memberships    |
+       |                       |                      |   organization_  |
+       |                       |                      |   members        |
        |                       |                      |<-- Active record-|
        |                       |<-- Membership valid --|                  |
        |                       |-- Set DB schema      |                  |
@@ -679,8 +687,8 @@ Authenticated Request        Auth Engine            PostgreSQL         Resource 
        |                         |                      |                    |
        |                         |-- 3. MEMBERSHIP  --->|                    |
        |                         |   CHECK              |                    |
-       |                         |   Is WorkspaceMember-|                    |
-       |                         |   ship ACTIVE?       |                    |
+       |                         |   Is Organization-   |                    |
+       |                         |   Member ACTIVE?     |                    |
        |                         |<-- Membership status-|                    |
        |                         |                      |                    |
        |             [DENY if membership inactive -> 403 Forbidden]          |
@@ -765,15 +773,16 @@ Organization owners are the highest-authority principals within a tenant organiz
 
 An organization must always have at least one active owner. If an owner account is deactivated, ownership must be transferred before deactivation is completed.
 
-### 11.3 Workspace Administrators
+### 11.3 Organization Administrators
 
-`ORGANIZATION_ADMIN` principals manage the day-to-day operations of the organization workspace:
+`ORGANIZATION_ADMIN` principals manage the day-to-day operations of the organization:
 - Inviting and removing members.
+- Creating and managing workspaces.
 - Assigning and modifying project roles.
 - Configuring repository integrations.
 - Setting up workflow automations and AI preferences.
 
-Workspace administrators cannot perform billing management, organization deletion, or ownership transfer. These operations are exclusively gated to `ORGANIZATION_OWNER`.
+Organization administrators cannot perform billing management, organization deletion, or ownership transfer. These operations are exclusively gated to `ORGANIZATION_OWNER`.
 
 ### 11.4 Security Administrators (Future)
 
@@ -815,7 +824,7 @@ Organization Admin          Auth Module            Invited User
        |                        |               or logs in (if existing)
        |                        |                       |
        |                        |<-- Accept invitation--|
-       |                        |-- Create WorkspaceMembership
+       |                        |-- Create OrganizationMember
        |                        |   (userId, orgId, role)
        |                        |-- Issue new JWT with orgId
        |<-- Membership active --|

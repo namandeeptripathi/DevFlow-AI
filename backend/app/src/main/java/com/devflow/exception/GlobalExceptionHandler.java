@@ -24,6 +24,10 @@ import com.devflow.user.exception.InvalidSearchQueryException;
 import com.devflow.user.exception.UserDomainException;
 import com.devflow.user.exception.UserProfileNotFoundException;
 import com.devflow.user.exception.UserPreferencesNotFoundException;
+import com.devflow.workspace.exception.WorkspaceAccessDeniedException;
+import com.devflow.workspace.exception.WorkspaceAlreadyExistsException;
+import com.devflow.workspace.exception.WorkspaceDomainException;
+import com.devflow.workspace.exception.WorkspaceNotFoundException;
 import jakarta.servlet.http.HttpServletRequest;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -280,6 +284,44 @@ public class GlobalExceptionHandler {
             HttpServletRequest request
     ) {
         log.warn("Organization invitation already processed: {}", ex.getMessage());
+        return buildErrorResponse(HttpStatus.BAD_REQUEST, "Bad Request", ex.getMessage(), request.getRequestURI());
+    }
+
+    // ── Workspace domain ──────────────────────────────────────────────────────
+
+    @ExceptionHandler(WorkspaceNotFoundException.class)
+    public ResponseEntity<Map<String, Object>> handleWorkspaceNotFound(
+            WorkspaceNotFoundException ex,
+            HttpServletRequest request
+    ) {
+        log.warn("Workspace not found: {}", ex.getMessage());
+        return buildErrorResponse(HttpStatus.NOT_FOUND, "Not Found", ex.getMessage(), request.getRequestURI());
+    }
+
+    @ExceptionHandler(WorkspaceAlreadyExistsException.class)
+    public ResponseEntity<Map<String, Object>> handleWorkspaceAlreadyExists(
+            WorkspaceAlreadyExistsException ex,
+            HttpServletRequest request
+    ) {
+        log.warn("Workspace conflict: {}", ex.getMessage());
+        return buildErrorResponse(HttpStatus.CONFLICT, "Conflict", ex.getMessage(), request.getRequestURI());
+    }
+
+    @ExceptionHandler(WorkspaceAccessDeniedException.class)
+    public ResponseEntity<Map<String, Object>> handleWorkspaceAccessDenied(
+            WorkspaceAccessDeniedException ex,
+            HttpServletRequest request
+    ) {
+        log.warn("Workspace access denied: {}", ex.getMessage());
+        return buildErrorResponse(HttpStatus.FORBIDDEN, "Forbidden", ex.getMessage(), request.getRequestURI());
+    }
+
+    @ExceptionHandler(WorkspaceDomainException.class)
+    public ResponseEntity<Map<String, Object>> handleWorkspaceDomainException(
+            WorkspaceDomainException ex,
+            HttpServletRequest request
+    ) {
+        log.warn("Workspace domain error: {}", ex.getMessage());
         return buildErrorResponse(HttpStatus.BAD_REQUEST, "Bad Request", ex.getMessage(), request.getRequestURI());
     }
 

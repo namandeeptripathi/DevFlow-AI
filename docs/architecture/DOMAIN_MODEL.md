@@ -67,17 +67,19 @@ graph TD
 - **Purpose:** Manages the identities of developers, the logical boundaries of their organizations (tenants), and the role-based access control (RBAC) rules that authorize operations within those boundaries.
 - **Responsibilities:**
   - Authenticate users and establish secure execution contexts.
-  - Define organization workspaces as hard transactional and logical boundaries.
+  - Define organizations as hard transactional and logical tenant boundaries.
   - Manage memberships and assign role-based permissions (RBAC).
+  - Manage workspaces as operational divisions within organizations.
   - Securely store OAuth installation contexts for third-party integrations (GitHub, Google).
 
 #### Domain Model Elements
 
 | DDD Element | Name | Description | Attributes / Fields |
 | :--- | :--- | :--- | :--- |
-| **Aggregate Root** | `Organization` | The fundamental tenant boundary. All business data (Projects, Repositories, Tasks) belongs to exactly one Organization. | `Id`, `Name`, `Slug`, `CreatedAt`, `Settings` |
+| **Aggregate Root** | `Organization` | The fundamental tenant boundary. All business data belongs to exactly one Organization. | `Id`, `Name`, `Slug`, `CreatedAt`, `UpdatedAt` |
 | **Aggregate Root** | `User` | A unique human operator or developer identity across the platform. | `Id`, `Email`, `FullName`, `PasswordHash`, `Status` |
-| **Entity** | `WorkspaceMembership` | The association between a `User` and an `Organization`, carrying specific system roles. | `Id`, `UserId`, `OrganizationId`, `Role` |
+| **Entity** | `OrganizationMember` | The association between a `User` and an `Organization`, carrying specific system roles and lifecycle status. | `Id`, `UserId`, `OrganizationId`, `Role`, `Status`, `JoinedAt` |
+| **Entity** | `Workspace` | An operational department or division within an `Organization` (e.g., Engineering, Design, Product, HR). | `Id`, `Name`, `OrganizationId`, `Visibility`, `Description` |
 | **Entity** | `Role` | A collection of authorized system permissions. | `Id`, `Name`, `Permissions` |
 | **Value Object** | `EmailAddress` | Encapsulates email syntax validation, normalization (lowercase), and comparison logic. | `Value` |
 | **Value Object** | `Permission` | An individual operation grant (e.g., `project:create`, `task:edit`). | `Action`, `Resource` |
@@ -313,14 +315,14 @@ This section formalizes the core business constraints that DevFlow must enforce,
 
 ### 5.1 Multi-Tenancy & Security Rules
 1. **Strict Organization Isolation:** An `Organization` represents a hard tenant boundary. Under no circumstances may queries, searches, or AI vector similarity operations scan data outside the currently authenticated `OrganizationId`.
-2. **Membership Authorization:** A user cannot edit, create, or comment on any Project, Task, Repository, or Document unless they have an active `WorkspaceMembership` in the parent `Organization`.
+2. **Membership Authorization:** A user cannot edit, create, or comment on any Workspace, Project, Task, Repository, or Document unless they have an active `OrganizationMember` record in the parent `Organization`.
 
 ### 5.2 Project Management Rules
 1. **Unique Project Keys:** A Project Key (e.g., `DEVF`) is unique within an Organization and immutable once the Project is created.
 2. **Atomic Task Keys:** A Task Key must be composed of the Project Key and a sequential index (e.g., `DEVF-42`). This index is generated atomically and must be unique within the Project.
 3. **Task Lifecycle Contiguity:** A Task must reside in exactly one `Column` on a `Board` belonging to the same Project.
 4. **Valid Cycle Scope:** A Task can only be assigned to a `Cycle` if the Cycle belongs to the parent `Project` and is in a `Draft` or `Active` state. Completed Cycles are closed to new task assignments.
-5. **Assignee Membership:** A Task can only be assigned to a User who has a valid and active `WorkspaceMembership` within the parent `Organization`.
+5. **Assignee Membership:** A Task can only be assigned to a User who has a valid and active `OrganizationMember` record within the parent `Organization`.
 
 ### 5.3 Repository Intelligence Rules
 1. **Secure Integration Binding:** A `Repository` cannot be registered or synced unless the Organization has established a valid `OAuthConnection` or installation token for the Git host.
