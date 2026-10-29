@@ -92,4 +92,11 @@ public interface OrganizationInvitationRepository extends JpaRepository<Organiza
      */
     List<OrganizationInvitation> findByExpiresAtBeforeAndStatus(
             Instant now, OrganizationInvitationStatus status);
+
+    /**
+     * Deletes all invitation records belonging to a specific organization.
+     *
+     * @param organizationId the UUID of the owning organization
+     */
+    void deleteByOrganizationId(UUID organizationId);
 }

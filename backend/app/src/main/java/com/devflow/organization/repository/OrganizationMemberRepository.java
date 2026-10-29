@@ -115,4 +115,11 @@ public interface OrganizationMemberRepository extends JpaRepository<Organization
      * @return the count of matching membership records
      */
     long countByOrganizationIdAndRoleAndStatus(UUID organizationId, OrganizationRole role, OrganizationMembershipStatus status);
+
+    /**
+     * Deletes all membership records belonging to a specific organization.
+     *
+     * @param organizationId the UUID of the owning organization
+     */
+    void deleteByOrganizationId(UUID organizationId);
 }

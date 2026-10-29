@@ -6,6 +6,7 @@ import com.devflow.organization.domain.OrganizationMembershipStatus;
 import com.devflow.organization.domain.OrganizationRole;
 import com.devflow.organization.exception.OrganizationAlreadyExistsException;
 import com.devflow.organization.exception.OrganizationNotFoundException;
+import com.devflow.organization.repository.OrganizationInvitationRepository;
 import com.devflow.organization.repository.OrganizationMemberRepository;
 import com.devflow.organization.repository.OrganizationRepository;
 import com.devflow.user.domain.User;
@@ -56,12 +57,14 @@ public class OrganizationService {
 
     private final OrganizationRepository organizationRepository;
     private final OrganizationMemberRepository organizationMemberRepository;
+    private final OrganizationInvitationRepository organizationInvitationRepository;
     private final UserRepository userRepository;
     private final OrganizationAuthorizationService authorizationService;
 
     public OrganizationService(
             OrganizationRepository organizationRepository,
             OrganizationMemberRepository organizationMemberRepository,
+            OrganizationInvitationRepository organizationInvitationRepository,
             UserRepository userRepository,
             OrganizationAuthorizationService authorizationService
     ) {
@@ -69,6 +72,8 @@ public class OrganizationService {
                 organizationRepository, "organizationRepository must not be null");
         this.organizationMemberRepository = Objects.requireNonNull(
                 organizationMemberRepository, "organizationMemberRepository must not be null");
+        this.organizationInvitationRepository = Objects.requireNonNull(
+                organizationInvitationRepository, "organizationInvitationRepository must not be null");
         this.userRepository = Objects.requireNonNull(
                 userRepository, "userRepository must not be null");
         this.authorizationService = Objects.requireNonNull(
@@ -209,6 +214,8 @@ public class OrganizationService {
                             "Organization not found: " + organizationId);
                 });
 
+        organizationInvitationRepository.deleteByOrganizationId(organizationId);
+        organizationMemberRepository.deleteByOrganizationId(organizationId);
         organizationRepository.delete(organization);
         log.info("Deleted organization [{}] with slug [{}] by user [{}]",
                 organizationId, organization.getSlug(), callerUserId);

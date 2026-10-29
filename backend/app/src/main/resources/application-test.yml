@@ -22,16 +22,21 @@ spring:
   # ── DataSource ────────────────────────────────────────────────────────────
   # Testcontainers @ServiceConnection dynamically provides the URL, username,
   # and password at test runtime. The values below are fallback defaults for
-  # environments where @ServiceConnection is not used.
+  # environments where @ServiceConnection is not used (local standing PostgreSQL).
   datasource:
-    url: jdbc:h2:mem:devflow_test;MODE=PostgreSQL;DATABASE_TO_LOWER=TRUE;DEFAULT_NULL_ORDERING=HIGH;DB_CLOSE_DELAY=-1;INIT=CREATE DOMAIN IF NOT EXISTS JSONB AS JSON
-    username: sa
-    password:
-    driver-class-name: org.h2.Driver
+    url: ${DEVFLOW_TEST_DB_URL:jdbc:postgresql://localhost:5432/devflow_test}
+    username: ${DEVFLOW_TEST_DB_USERNAME:devflow}
+    password: ${DEVFLOW_TEST_DB_PASSWORD:devflow_secret}
+    driver-class-name: org.postgresql.Driver
     hikari:
       pool-name: DevFlow-Test-Pool
       maximum-pool-size: 5
       minimum-idle: 1
+
+  # ── Prevent @DataJpaTest from replacing DataSource with H2 ───────────────
+  test:
+    database:
+      replace: none
 
   # ── Redis ─────────────────────────────────────────────────────────────────
   # Testcontainers manages Redis in test; override host/port here or use
@@ -43,9 +48,13 @@ spring:
 
   # ── JPA ──────────────────────────────────────────────────────────────────
   jpa:
+    database-platform: org.hibernate.dialect.PostgreSQLDialect
     show-sql: false
+    hibernate:
+      ddl-auto: validate
     properties:
       hibernate:
+        dialect: org.hibernate.dialect.PostgreSQLDialect
         format_sql: false
 
   # ── DevTools: disabled in test ────────────────────────────────────────────

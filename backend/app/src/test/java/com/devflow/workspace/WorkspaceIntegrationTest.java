@@ -31,7 +31,7 @@ import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMock
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.MediaType;
-import org.springframework.test.context.TestPropertySource;
+import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -63,16 +63,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  */
 @SpringBootTest
 @AutoConfigureMockMvc
-@TestPropertySource(properties = {
-    "spring.datasource.url=jdbc:postgresql://localhost:5432/devflow_test",
-    "spring.datasource.username=devflow",
-    "spring.datasource.password=devflow_secret",
-    "spring.datasource.driver-class-name=org.postgresql.Driver",
-    "spring.jpa.properties.hibernate.dialect=org.hibernate.dialect.PostgreSQLDialect",
-    "spring.jpa.hibernate.ddl-auto=validate",
-    "spring.flyway.enabled=true",
-    "devflow.security.cors.allowed-origins[0]=http://localhost:3000"
-})
+@ActiveProfiles("test")
 @Transactional
 @DisplayName("Workspace End-to-End Integration Tests")
 class WorkspaceIntegrationTest {

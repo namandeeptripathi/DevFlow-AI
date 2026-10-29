@@ -80,6 +80,24 @@ class SecurityConfigurationTest {
     @MockBean
     private com.devflow.auth.service.AuthenticationService authenticationService;
 
+    @MockBean
+    private com.devflow.organization.service.OrganizationService organizationService;
+
+    @MockBean
+    private com.devflow.workspace.service.WorkspaceService workspaceService;
+
+    @MockBean
+    private com.devflow.user.service.UserProfileService userProfileService;
+
+    @MockBean
+    private com.devflow.user.service.AvatarService avatarService;
+
+    @MockBean
+    private com.devflow.user.service.UserPreferencesService userPreferencesService;
+
+    @MockBean
+    private com.devflow.user.service.UserSearchService userSearchService;
+
     // ── Public endpoint tests ─────────────────────────────────────────────────
 
     @Nested
