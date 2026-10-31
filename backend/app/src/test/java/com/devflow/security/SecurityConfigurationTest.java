@@ -87,6 +87,9 @@ class SecurityConfigurationTest {
     private com.devflow.workspace.service.WorkspaceService workspaceService;
 
     @MockBean
+    private com.devflow.team.service.TeamService teamService;
+
+    @MockBean
     private com.devflow.user.service.UserProfileService userProfileService;
 
     @MockBean
