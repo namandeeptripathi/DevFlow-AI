@@ -17,6 +17,13 @@ import com.devflow.organization.exception.OrganizationMemberAlreadyExistsExcepti
 import com.devflow.organization.exception.OrganizationMemberNotFoundException;
 import com.devflow.organization.exception.OrganizationMembershipRequiredException;
 import com.devflow.organization.exception.OrganizationNotFoundException;
+import com.devflow.team.exception.InvalidTeamOperationException;
+import com.devflow.team.exception.TeamAccessDeniedException;
+import com.devflow.team.exception.TeamAlreadyExistsException;
+import com.devflow.team.exception.TeamDomainException;
+import com.devflow.team.exception.TeamMemberAlreadyExistsException;
+import com.devflow.team.exception.TeamMemberNotFoundException;
+import com.devflow.team.exception.TeamNotFoundException;
 import com.devflow.user.exception.AvatarStorageException;
 import com.devflow.user.exception.InvalidAvatarException;
 import com.devflow.user.exception.InvalidPreferencesException;
@@ -322,6 +329,80 @@ public class GlobalExceptionHandler {
             HttpServletRequest request
     ) {
         log.warn("Workspace domain error: {}", ex.getMessage());
+        return buildErrorResponse(HttpStatus.BAD_REQUEST, "Bad Request", ex.getMessage(), request.getRequestURI());
+    }
+
+    // ── Team domain ───────────────────────────────────────────────────────────
+
+    @ExceptionHandler(TeamNotFoundException.class)
+    public ResponseEntity<Map<String, Object>> handleTeamNotFound(
+            TeamNotFoundException ex,
+            HttpServletRequest request
+    ) {
+        log.warn("Team not found: {}", ex.getMessage());
+        return buildErrorResponse(HttpStatus.NOT_FOUND, "Not Found", ex.getMessage(), request.getRequestURI());
+    }
+
+    @ExceptionHandler(TeamMemberNotFoundException.class)
+    public ResponseEntity<Map<String, Object>> handleTeamMemberNotFound(
+            TeamMemberNotFoundException ex,
+            HttpServletRequest request
+    ) {
+        log.warn("Team member not found: {}", ex.getMessage());
+        return buildErrorResponse(HttpStatus.NOT_FOUND, "Not Found", ex.getMessage(), request.getRequestURI());
+    }
+
+    @ExceptionHandler(TeamAlreadyExistsException.class)
+    public ResponseEntity<Map<String, Object>> handleTeamAlreadyExists(
+            TeamAlreadyExistsException ex,
+            HttpServletRequest request
+    ) {
+        log.warn("Team conflict: {}", ex.getMessage());
+        return buildErrorResponse(HttpStatus.CONFLICT, "Conflict", ex.getMessage(), request.getRequestURI());
+    }
+
+    @ExceptionHandler(TeamMemberAlreadyExistsException.class)
+    public ResponseEntity<Map<String, Object>> handleTeamMemberAlreadyExists(
+            TeamMemberAlreadyExistsException ex,
+            HttpServletRequest request
+    ) {
+        log.warn("Team member conflict: {}", ex.getMessage());
+        return buildErrorResponse(HttpStatus.CONFLICT, "Conflict", ex.getMessage(), request.getRequestURI());
+    }
+
+    @ExceptionHandler(InvalidTeamOperationException.class)
+    public ResponseEntity<Map<String, Object>> handleInvalidTeamOperation(
+            InvalidTeamOperationException ex,
+            HttpServletRequest request
+    ) {
+        log.warn("Invalid team operation: {}", ex.getMessage());
+        return buildErrorResponse(HttpStatus.BAD_REQUEST, "Bad Request", ex.getMessage(), request.getRequestURI());
+    }
+
+    @ExceptionHandler(TeamAccessDeniedException.class)
+    public ResponseEntity<Map<String, Object>> handleTeamAccessDenied(
+            TeamAccessDeniedException ex,
+            HttpServletRequest request
+    ) {
+        log.warn("Team access denied: {}", ex.getMessage());
+        return buildErrorResponse(HttpStatus.FORBIDDEN, "Forbidden", ex.getMessage(), request.getRequestURI());
+    }
+
+    @ExceptionHandler(TeamDomainException.class)
+    public ResponseEntity<Map<String, Object>> handleTeamDomainException(
+            TeamDomainException ex,
+            HttpServletRequest request
+    ) {
+        log.warn("Team domain error: {}", ex.getMessage());
+        return buildErrorResponse(HttpStatus.BAD_REQUEST, "Bad Request", ex.getMessage(), request.getRequestURI());
+    }
+
+    @ExceptionHandler(IllegalArgumentException.class)
+    public ResponseEntity<Map<String, Object>> handleIllegalArgument(
+            IllegalArgumentException ex,
+            HttpServletRequest request
+    ) {
+        log.warn("Illegal argument on [{}]: {}", request.getRequestURI(), ex.getMessage());
         return buildErrorResponse(HttpStatus.BAD_REQUEST, "Bad Request", ex.getMessage(), request.getRequestURI());
     }
 
