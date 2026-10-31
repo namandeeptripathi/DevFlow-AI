@@ -109,7 +109,9 @@ Every Aggregate Root defined in the Domain Model maps to a primary table inside 
 | Bounded Context | Aggregate Root | Owning Schema | Persistence Responsibility | Lifecycle Boundary / Cascades |
 | :--- | :--- | :--- | :--- | :--- |
 | **IAM** | `Organization` | `auth` | `devflow-auth` | Core organization tenant boundary. Deletion cascade is blocked if active Workspaces, Projects, or Repositories reference its ID. |
-| **IAM** | `Workspace` | `auth` | `devflow-auth` | Operational workspace within an Organization. Deletion cascade is blocked if active Projects reference its ID. |
+| **IAM** | `Workspace` | `auth` | `devflow-auth` | Operational workspace within an Organization. Deletion cascade is blocked if active Projects or Teams reference its ID. |
+| **IAM** | `Team` | `auth` | `devflow-team` | Collaborative team within a Workspace. Composite tenant integrity ensures matching organization boundary. Deletion cascade is blocked if active resources reference its ID. Deleting a Team cascades to delete its `team_members`. |
+| **IAM** | `TeamMember` | `auth` | `devflow-team` | Association between `Team` and `User`. Single source of truth for leadership via role `LEAD`. At most one lead per team enforced via partial unique index. Cascaded on team delete; user deletion is restricted. |
 | **IAM** | `User` | `auth` | `devflow-auth` | Deleting a User disables login credentials, with soft-deletion handling user profile details. |
 | **PM** | `Project` | `pm` | `devflow-project-management` | Project container. Deleting a Project cascades to delete boards, columns, cycles, epics, and tasks. |
 | **PM** | `Task` | `pm` | `devflow-project-management` | Standalone Aggregate. Deletion cascades to its own description edits history, but does not affect projects or boards. |
@@ -121,6 +123,48 @@ Every Aggregate Root defined in the Domain Model maps to a primary table inside 
 | **Collaboration** | `CommentThread` | `collaboration` | `devflow-collaboration` | Comment container. Thread deletions cascade to purge child comments and reactions. |
 | **Notifications** | `Notification` | `notifications` | `devflow-notifications` | Alert instance. Cleaned up after expiration or read status timeout. |
 | **Notifications** | `NotificationPreference`| `notifications` | `devflow-notifications` | User configuration map. Deleted if the corresponding user profile is purged. |
+
+### 4.1 Teams Domain Schema Specifications
+
+#### `teams` Table
+- **Purpose:** Models operational engineering units scoped within a Workspace and Organization.
+- **Columns:**
+  - `id` (`VARCHAR(36)`): Primary Key (UUID).
+  - `workspace_id` (`VARCHAR(36)`): Foreign Key referencing `workspaces(id, organization_id)`.
+  - `organization_id` (`VARCHAR(36)`): Foreign Key referencing `organizations(id)` and participating in composite tenant integrity.
+  - `name` (`VARCHAR(100)`): Team name, unique per workspace case-insensitively.
+  - `description` (`VARCHAR(500)`): Optional human-readable description.
+  - `status` (`VARCHAR(30)`): Lifecycle status (`ACTIVE`, `ARCHIVED`).
+  - `created_at` (`TIMESTAMPTZ`): Record creation timestamp.
+  - `updated_at` (`TIMESTAMPTZ`): Record mutation timestamp.
+  - `version` (`INT8`): Optimistic locking concurrency version.
+- **Constraints & Indexes:**
+  - `pk_teams`: Primary key on `id`.
+  - `fk_teams_workspace`: Foreign key on `(workspace_id, organization_id)` referencing `workspaces(id, organization_id)` with `ON DELETE RESTRICT`.
+  - `fk_teams_organization`: Foreign key on `organization_id` referencing `organizations(id)` with `ON DELETE RESTRICT`.
+  - `chk_teams_status`: Check constraint ensuring `status IN ('ACTIVE', 'ARCHIVED')`.
+  - `uk_teams_workspace_name_ci`: Unique index on `(workspace_id, LOWER(name))` for case-insensitive uniqueness.
+  - `idx_teams_organization_id`: Index on `organization_id` for tenant lookups.
+
+#### `team_members` Table
+- **Purpose:** Associates users with teams, defining functional roles (`LEAD`, `MEMBER`). Single source of truth for leadership.
+- **Columns:**
+  - `id` (`VARCHAR(36)`): Primary Key (UUID).
+  - `team_id` (`VARCHAR(36)`): Foreign Key referencing `teams(id)`.
+  - `user_id` (`VARCHAR(36)`): Foreign Key referencing `users(id)`.
+  - `role` (`VARCHAR(30)`): Functional role (`LEAD`, `MEMBER`).
+  - `joined_at` (`TIMESTAMPTZ`): Timestamp when user joined the team.
+  - `created_at` (`TIMESTAMPTZ`): Record creation timestamp.
+  - `updated_at` (`TIMESTAMPTZ`): Record mutation timestamp.
+  - `version` (`INT8`): Optimistic locking concurrency version.
+- **Constraints & Indexes:**
+  - `pk_team_members`: Primary key on `id`.
+  - `uk_team_members_team_user`: Unique constraint on `(team_id, user_id)` preventing duplicate memberships.
+  - `fk_team_members_team`: Foreign key on `team_id` referencing `teams(id)` with `ON DELETE CASCADE`.
+  - `fk_team_members_user`: Foreign key on `user_id` referencing `users(id)` with `ON DELETE RESTRICT`.
+  - `chk_team_members_role`: Check constraint ensuring `role IN ('LEAD', 'MEMBER')`.
+  - `uk_team_members_team_lead`: Partial unique index on `team_id WHERE role = 'LEAD'`, guaranteeing at most one active lead per team.
+  - `idx_team_members_user_id`: Index on `user_id` for user membership queries.
 
 ---
 
