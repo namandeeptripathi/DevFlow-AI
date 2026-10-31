@@ -7,6 +7,8 @@ import com.devflow.team.dto.request.CreateTeamRequest;
 import com.devflow.team.dto.response.TeamResponse;
 import com.devflow.team.service.TeamService;
 import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.Parameter;
+import io.swagger.v3.oas.annotations.media.ArraySchema;
 import io.swagger.v3.oas.annotations.media.Content;
 import io.swagger.v3.oas.annotations.media.Schema;
 import io.swagger.v3.oas.annotations.responses.ApiResponse;
@@ -78,25 +80,29 @@ public class WorkspaceTeamController {
         summary = "Create a team in workspace",
         description = "Creates a new engineering team within the specified workspace. Requires organization ADMIN or OWNER role. " +
                 "The creator is automatically assigned as the initial team LEAD.",
+        operationId = "createTeam",
         security = @SecurityRequirement(name = "bearerAuth")
     )
     @ApiResponses(value = {
         @ApiResponse(responseCode = "201", description = "Team created successfully",
-            content = @Content(schema = @Schema(implementation = TeamResponse.class))),
+            content = @Content(mediaType = "application/json", schema = @Schema(implementation = TeamResponse.class))),
         @ApiResponse(responseCode = "400", description = "Validation failure — invalid or missing fields",
-            content = @Content),
+            content = @Content(mediaType = "application/json", schema = @Schema(implementation = TeamController.ErrorResponse.class))),
         @ApiResponse(responseCode = "401", description = "Unauthorized — valid Bearer token required",
-            content = @Content),
+            content = @Content(mediaType = "application/json", schema = @Schema(implementation = TeamController.ErrorResponse.class))),
         @ApiResponse(responseCode = "403", description = "Forbidden — requires organization ADMIN or OWNER role",
-            content = @Content),
+            content = @Content(mediaType = "application/json", schema = @Schema(implementation = TeamController.ErrorResponse.class))),
         @ApiResponse(responseCode = "404", description = "Organization or workspace not found",
-            content = @Content),
+            content = @Content(mediaType = "application/json", schema = @Schema(implementation = TeamController.ErrorResponse.class))),
         @ApiResponse(responseCode = "409", description = "Team with the given name already exists in the workspace",
-            content = @Content)
+            content = @Content(mediaType = "application/json", schema = @Schema(implementation = TeamController.ErrorResponse.class)))
     })
     public ResponseEntity<TeamResponse> createTeam(
+            @Parameter(description = "UUID of the tenant organization", example = "550e8400-e29b-41d4-a716-446655440000", required = true)
             @PathVariable UUID organizationId,
+            @Parameter(description = "UUID of the parent workspace", example = "550e8400-e29b-41d4-a716-446655440001", required = true)
             @PathVariable UUID workspaceId,
+            @Parameter(hidden = true)
             @AuthenticationPrincipal DevFlowUserDetails userDetails,
             @Valid @RequestBody CreateTeamRequest request
     ) {
@@ -127,22 +133,27 @@ public class WorkspaceTeamController {
         summary = "List teams in workspace",
         description = "Lists teams belonging to the specified workspace. Supports optional status filtering. " +
                 "Respects workspace visibility rules.",
+        operationId = "listWorkspaceTeams",
         security = @SecurityRequirement(name = "bearerAuth")
     )
     @ApiResponses(value = {
         @ApiResponse(responseCode = "200", description = "Teams retrieved successfully",
-            content = @Content(schema = @Schema(implementation = TeamResponse.class))),
+            content = @Content(mediaType = "application/json", array = @ArraySchema(schema = @Schema(implementation = TeamResponse.class)))),
         @ApiResponse(responseCode = "401", description = "Unauthorized — valid Bearer token required",
-            content = @Content),
+            content = @Content(mediaType = "application/json", schema = @Schema(implementation = TeamController.ErrorResponse.class))),
         @ApiResponse(responseCode = "403", description = "Forbidden — requires active organization membership (or ADMIN/OWNER for private workspace)",
-            content = @Content),
+            content = @Content(mediaType = "application/json", schema = @Schema(implementation = TeamController.ErrorResponse.class))),
         @ApiResponse(responseCode = "404", description = "Organization or workspace not found",
-            content = @Content)
+            content = @Content(mediaType = "application/json", schema = @Schema(implementation = TeamController.ErrorResponse.class)))
     })
     public ResponseEntity<List<TeamResponse>> listTeams(
+            @Parameter(description = "UUID of the tenant organization", example = "550e8400-e29b-41d4-a716-446655440000", required = true)
             @PathVariable UUID organizationId,
+            @Parameter(description = "UUID of the workspace", example = "550e8400-e29b-41d4-a716-446655440001", required = true)
             @PathVariable UUID workspaceId,
+            @Parameter(description = "Optional lifecycle status filter (ACTIVE, ARCHIVED)", example = "ACTIVE")
             @RequestParam(required = false) TeamStatus status,
+            @Parameter(hidden = true)
             @AuthenticationPrincipal DevFlowUserDetails userDetails
     ) {
         List<Team> teams = teamService.listTeams(
@@ -170,22 +181,27 @@ public class WorkspaceTeamController {
     @Operation(
         summary = "Get team within workspace",
         description = "Retrieves a team by ID within the workspace and organization boundary. Respects workspace visibility rules.",
+        operationId = "getTeamInWorkspace",
         security = @SecurityRequirement(name = "bearerAuth")
     )
     @ApiResponses(value = {
         @ApiResponse(responseCode = "200", description = "Team retrieved successfully",
-            content = @Content(schema = @Schema(implementation = TeamResponse.class))),
+            content = @Content(mediaType = "application/json", schema = @Schema(implementation = TeamResponse.class))),
         @ApiResponse(responseCode = "401", description = "Unauthorized — valid Bearer token required",
-            content = @Content),
+            content = @Content(mediaType = "application/json", schema = @Schema(implementation = TeamController.ErrorResponse.class))),
         @ApiResponse(responseCode = "403", description = "Forbidden — access denied to workspace",
-            content = @Content),
+            content = @Content(mediaType = "application/json", schema = @Schema(implementation = TeamController.ErrorResponse.class))),
         @ApiResponse(responseCode = "404", description = "Team not found in workspace",
-            content = @Content)
+            content = @Content(mediaType = "application/json", schema = @Schema(implementation = TeamController.ErrorResponse.class)))
     })
     public ResponseEntity<TeamResponse> getTeamInWorkspace(
+            @Parameter(description = "UUID of the tenant organization", example = "550e8400-e29b-41d4-a716-446655440000", required = true)
             @PathVariable UUID organizationId,
+            @Parameter(description = "UUID of the workspace", example = "550e8400-e29b-41d4-a716-446655440001", required = true)
             @PathVariable UUID workspaceId,
+            @Parameter(description = "UUID of the team", example = "550e8400-e29b-41d4-a716-446655440002", required = true)
             @PathVariable UUID teamId,
+            @Parameter(hidden = true)
             @AuthenticationPrincipal DevFlowUserDetails userDetails
     ) {
         Team team = teamService.getTeam(

@@ -11,6 +11,8 @@ import com.devflow.team.dto.response.TeamMemberResponse;
 import com.devflow.team.dto.response.TeamResponse;
 import com.devflow.team.service.TeamService;
 import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.Parameter;
+import io.swagger.v3.oas.annotations.media.ArraySchema;
 import io.swagger.v3.oas.annotations.media.Content;
 import io.swagger.v3.oas.annotations.media.Schema;
 import io.swagger.v3.oas.annotations.responses.ApiResponse;
@@ -68,6 +70,26 @@ public class TeamController {
         this.teamService = Objects.requireNonNull(teamService, "teamService must not be null");
     }
 
+    /**
+     * Standard error response representation for OpenAPI documentation.
+     *
+     * <p>Reflects the uniform JSON error envelope produced by
+     * {@link com.devflow.exception.GlobalExceptionHandler}.
+     */
+    @Schema(description = "Standard API error response payload")
+    public record ErrorResponse(
+            @Schema(description = "Timestamp when the error occurred", example = "2026-11-01T00:30:00Z", requiredMode = Schema.RequiredMode.REQUIRED)
+            java.time.Instant timestamp,
+            @Schema(description = "HTTP status code", example = "400", requiredMode = Schema.RequiredMode.REQUIRED)
+            int status,
+            @Schema(description = "HTTP status reason phrase", example = "Bad Request", requiredMode = Schema.RequiredMode.REQUIRED)
+            String error,
+            @Schema(description = "Detailed error message or validation errors", example = "Team name is required", requiredMode = Schema.RequiredMode.REQUIRED)
+            String message,
+            @Schema(description = "Request URI path where the error occurred", example = "/api/v1/teams", requiredMode = Schema.RequiredMode.REQUIRED)
+            String path
+    ) {}
+
     // ── Team Resource Lifecycle ────────────────────────────────────────────────
 
     /**
@@ -83,20 +105,23 @@ public class TeamController {
     @Operation(
         summary = "Get team by ID",
         description = "Retrieves an engineering team by its unique identifier. Enforces workspace visibility.",
+        operationId = "getTeam",
         security = @SecurityRequirement(name = "bearerAuth")
     )
     @ApiResponses(value = {
         @ApiResponse(responseCode = "200", description = "Team retrieved successfully",
-            content = @Content(schema = @Schema(implementation = TeamResponse.class))),
+            content = @Content(mediaType = "application/json", schema = @Schema(implementation = TeamResponse.class))),
         @ApiResponse(responseCode = "401", description = "Unauthorized — valid Bearer token required",
-            content = @Content),
+            content = @Content(mediaType = "application/json", schema = @Schema(implementation = ErrorResponse.class))),
         @ApiResponse(responseCode = "403", description = "Forbidden — caller not authorized to view this team",
-            content = @Content),
+            content = @Content(mediaType = "application/json", schema = @Schema(implementation = ErrorResponse.class))),
         @ApiResponse(responseCode = "404", description = "Team not found",
-            content = @Content)
+            content = @Content(mediaType = "application/json", schema = @Schema(implementation = ErrorResponse.class)))
     })
     public ResponseEntity<TeamResponse> getTeam(
+            @Parameter(description = "UUID of the team", example = "550e8400-e29b-41d4-a716-446655440000", required = true)
             @PathVariable UUID teamId,
+            @Parameter(hidden = true)
             @AuthenticationPrincipal DevFlowUserDetails userDetails
     ) {
         Team team = teamService.getTeam(teamId, userDetails.getId());
@@ -118,24 +143,27 @@ public class TeamController {
     @Operation(
         summary = "Update team",
         description = "Applies a partial update to mutable team attributes. Requires organization ADMIN/OWNER or team LEAD role.",
+        operationId = "updateTeam",
         security = @SecurityRequirement(name = "bearerAuth")
     )
     @ApiResponses(value = {
         @ApiResponse(responseCode = "200", description = "Team updated successfully",
-            content = @Content(schema = @Schema(implementation = TeamResponse.class))),
+            content = @Content(mediaType = "application/json", schema = @Schema(implementation = TeamResponse.class))),
         @ApiResponse(responseCode = "400", description = "Validation failure or team is archived",
-            content = @Content),
+            content = @Content(mediaType = "application/json", schema = @Schema(implementation = ErrorResponse.class))),
         @ApiResponse(responseCode = "401", description = "Unauthorized — valid Bearer token required",
-            content = @Content),
+            content = @Content(mediaType = "application/json", schema = @Schema(implementation = ErrorResponse.class))),
         @ApiResponse(responseCode = "403", description = "Forbidden — requires ADMIN, OWNER, or LEAD role",
-            content = @Content),
+            content = @Content(mediaType = "application/json", schema = @Schema(implementation = ErrorResponse.class))),
         @ApiResponse(responseCode = "404", description = "Team not found",
-            content = @Content),
+            content = @Content(mediaType = "application/json", schema = @Schema(implementation = ErrorResponse.class))),
         @ApiResponse(responseCode = "409", description = "Team name already in use within the workspace",
-            content = @Content)
+            content = @Content(mediaType = "application/json", schema = @Schema(implementation = ErrorResponse.class)))
     })
     public ResponseEntity<TeamResponse> updateTeam(
+            @Parameter(description = "UUID of the team to update", example = "550e8400-e29b-41d4-a716-446655440000", required = true)
             @PathVariable UUID teamId,
+            @Parameter(hidden = true)
             @AuthenticationPrincipal DevFlowUserDetails userDetails,
             @Valid @RequestBody UpdateTeamRequest request
     ) {
@@ -162,22 +190,25 @@ public class TeamController {
     @Operation(
         summary = "Archive team",
         description = "Archives an active engineering team, making it read-only. Requires organization ADMIN/OWNER or team LEAD role.",
+        operationId = "archiveTeam",
         security = @SecurityRequirement(name = "bearerAuth")
     )
     @ApiResponses(value = {
         @ApiResponse(responseCode = "200", description = "Team archived successfully",
-            content = @Content(schema = @Schema(implementation = TeamResponse.class))),
+            content = @Content(mediaType = "application/json", schema = @Schema(implementation = TeamResponse.class))),
         @ApiResponse(responseCode = "400", description = "Team is already archived",
-            content = @Content),
+            content = @Content(mediaType = "application/json", schema = @Schema(implementation = ErrorResponse.class))),
         @ApiResponse(responseCode = "401", description = "Unauthorized — valid Bearer token required",
-            content = @Content),
+            content = @Content(mediaType = "application/json", schema = @Schema(implementation = ErrorResponse.class))),
         @ApiResponse(responseCode = "403", description = "Forbidden — requires ADMIN, OWNER, or LEAD role",
-            content = @Content),
+            content = @Content(mediaType = "application/json", schema = @Schema(implementation = ErrorResponse.class))),
         @ApiResponse(responseCode = "404", description = "Team not found",
-            content = @Content)
+            content = @Content(mediaType = "application/json", schema = @Schema(implementation = ErrorResponse.class)))
     })
     public ResponseEntity<TeamResponse> archiveTeam(
+            @Parameter(description = "UUID of the team to archive", example = "550e8400-e29b-41d4-a716-446655440000", required = true)
             @PathVariable UUID teamId,
+            @Parameter(hidden = true)
             @AuthenticationPrincipal DevFlowUserDetails userDetails
     ) {
         Team archived = teamService.archiveTeam(teamId, userDetails.getId());
@@ -200,24 +231,27 @@ public class TeamController {
     @Operation(
         summary = "Add team member",
         description = "Adds an active organization member to the team. Requires organization ADMIN/OWNER or team LEAD role.",
+        operationId = "addTeamMember",
         security = @SecurityRequirement(name = "bearerAuth")
     )
     @ApiResponses(value = {
         @ApiResponse(responseCode = "201", description = "Team member added successfully",
-            content = @Content(schema = @Schema(implementation = TeamMemberResponse.class))),
+            content = @Content(mediaType = "application/json", schema = @Schema(implementation = TeamMemberResponse.class))),
         @ApiResponse(responseCode = "400", description = "Validation failure, team is archived, or member is suspended",
-            content = @Content),
+            content = @Content(mediaType = "application/json", schema = @Schema(implementation = ErrorResponse.class))),
         @ApiResponse(responseCode = "401", description = "Unauthorized — valid Bearer token required",
-            content = @Content),
+            content = @Content(mediaType = "application/json", schema = @Schema(implementation = ErrorResponse.class))),
         @ApiResponse(responseCode = "403", description = "Forbidden — requires ADMIN, OWNER, or LEAD role",
-            content = @Content),
+            content = @Content(mediaType = "application/json", schema = @Schema(implementation = ErrorResponse.class))),
         @ApiResponse(responseCode = "404", description = "Team or organization member not found",
-            content = @Content),
+            content = @Content(mediaType = "application/json", schema = @Schema(implementation = ErrorResponse.class))),
         @ApiResponse(responseCode = "409", description = "User is already a member of the team",
-            content = @Content)
+            content = @Content(mediaType = "application/json", schema = @Schema(implementation = ErrorResponse.class)))
     })
     public ResponseEntity<TeamMemberResponse> addMember(
+            @Parameter(description = "UUID of the team", example = "550e8400-e29b-41d4-a716-446655440000", required = true)
             @PathVariable UUID teamId,
+            @Parameter(hidden = true)
             @AuthenticationPrincipal DevFlowUserDetails userDetails,
             @Valid @RequestBody AddTeamMemberRequest request
     ) {
@@ -238,20 +272,23 @@ public class TeamController {
     @Operation(
         summary = "List team members",
         description = "Lists all members of the specified team. Respects workspace visibility rules.",
+        operationId = "listTeamMembers",
         security = @SecurityRequirement(name = "bearerAuth")
     )
     @ApiResponses(value = {
         @ApiResponse(responseCode = "200", description = "Team members retrieved successfully",
-            content = @Content(schema = @Schema(implementation = TeamMemberResponse.class))),
+            content = @Content(mediaType = "application/json", array = @ArraySchema(schema = @Schema(implementation = TeamMemberResponse.class)))),
         @ApiResponse(responseCode = "401", description = "Unauthorized — valid Bearer token required",
-            content = @Content),
+            content = @Content(mediaType = "application/json", schema = @Schema(implementation = ErrorResponse.class))),
         @ApiResponse(responseCode = "403", description = "Forbidden — caller not authorized to view team",
-            content = @Content),
+            content = @Content(mediaType = "application/json", schema = @Schema(implementation = ErrorResponse.class))),
         @ApiResponse(responseCode = "404", description = "Team not found",
-            content = @Content)
+            content = @Content(mediaType = "application/json", schema = @Schema(implementation = ErrorResponse.class)))
     })
     public ResponseEntity<List<TeamMemberResponse>> listMembers(
+            @Parameter(description = "UUID of the team", example = "550e8400-e29b-41d4-a716-446655440000", required = true)
             @PathVariable UUID teamId,
+            @Parameter(hidden = true)
             @AuthenticationPrincipal DevFlowUserDetails userDetails
     ) {
         List<TeamMember> members = teamService.listMembers(teamId, userDetails.getId());
@@ -277,23 +314,27 @@ public class TeamController {
         summary = "Remove team member",
         description = "Removes a member from the team. The current lead cannot be removed without prior transfer. " +
                 "Requires organization ADMIN/OWNER or team LEAD role.",
+        operationId = "removeTeamMember",
         security = @SecurityRequirement(name = "bearerAuth")
     )
     @ApiResponses(value = {
         @ApiResponse(responseCode = "204", description = "Team member removed successfully",
             content = @Content),
         @ApiResponse(responseCode = "400", description = "Team is archived or attempt to remove active lead",
-            content = @Content),
+            content = @Content(mediaType = "application/json", schema = @Schema(implementation = ErrorResponse.class))),
         @ApiResponse(responseCode = "401", description = "Unauthorized — valid Bearer token required",
-            content = @Content),
+            content = @Content(mediaType = "application/json", schema = @Schema(implementation = ErrorResponse.class))),
         @ApiResponse(responseCode = "403", description = "Forbidden — requires ADMIN, OWNER, or LEAD role",
-            content = @Content),
+            content = @Content(mediaType = "application/json", schema = @Schema(implementation = ErrorResponse.class))),
         @ApiResponse(responseCode = "404", description = "Team or member record not found",
-            content = @Content)
+            content = @Content(mediaType = "application/json", schema = @Schema(implementation = ErrorResponse.class)))
     })
     public ResponseEntity<Void> removeMember(
+            @Parameter(description = "UUID of the team", example = "550e8400-e29b-41d4-a716-446655440000", required = true)
             @PathVariable UUID teamId,
+            @Parameter(description = "UUID of the member user to remove", example = "550e8400-e29b-41d4-a716-446655440002", required = true)
             @PathVariable UUID userId,
+            @Parameter(hidden = true)
             @AuthenticationPrincipal DevFlowUserDetails userDetails
     ) {
         teamService.removeMember(teamId, userId, userDetails.getId());
@@ -314,22 +355,25 @@ public class TeamController {
     @Operation(
         summary = "Leave team",
         description = "Allows the authenticated member to leave the team. Team lead cannot leave without transfer.",
+        operationId = "leaveTeam",
         security = @SecurityRequirement(name = "bearerAuth")
     )
     @ApiResponses(value = {
         @ApiResponse(responseCode = "204", description = "Successfully left the team",
             content = @Content),
         @ApiResponse(responseCode = "400", description = "Team is archived or caller is the active team lead",
-            content = @Content),
+            content = @Content(mediaType = "application/json", schema = @Schema(implementation = ErrorResponse.class))),
         @ApiResponse(responseCode = "401", description = "Unauthorized — valid Bearer token required",
-            content = @Content),
+            content = @Content(mediaType = "application/json", schema = @Schema(implementation = ErrorResponse.class))),
         @ApiResponse(responseCode = "403", description = "Forbidden — suspended organization member",
-            content = @Content),
+            content = @Content(mediaType = "application/json", schema = @Schema(implementation = ErrorResponse.class))),
         @ApiResponse(responseCode = "404", description = "Team or membership record not found",
-            content = @Content)
+            content = @Content(mediaType = "application/json", schema = @Schema(implementation = ErrorResponse.class)))
     })
     public ResponseEntity<Void> leaveTeam(
+            @Parameter(description = "UUID of the team to leave", example = "550e8400-e29b-41d4-a716-446655440000", required = true)
             @PathVariable UUID teamId,
+            @Parameter(hidden = true)
             @AuthenticationPrincipal DevFlowUserDetails userDetails
     ) {
         teamService.leaveTeam(teamId, userDetails.getId());
@@ -349,20 +393,23 @@ public class TeamController {
     @Operation(
         summary = "Get team lead",
         description = "Resolves the designated active team lead. Respects workspace visibility rules.",
+        operationId = "getTeamLead",
         security = @SecurityRequirement(name = "bearerAuth")
     )
     @ApiResponses(value = {
         @ApiResponse(responseCode = "200", description = "Team lead resolved successfully",
-            content = @Content(schema = @Schema(implementation = TeamLeadResponse.class))),
+            content = @Content(mediaType = "application/json", schema = @Schema(implementation = TeamLeadResponse.class))),
         @ApiResponse(responseCode = "401", description = "Unauthorized — valid Bearer token required",
-            content = @Content),
+            content = @Content(mediaType = "application/json", schema = @Schema(implementation = ErrorResponse.class))),
         @ApiResponse(responseCode = "403", description = "Forbidden — caller not authorized to view team",
-            content = @Content),
+            content = @Content(mediaType = "application/json", schema = @Schema(implementation = ErrorResponse.class))),
         @ApiResponse(responseCode = "404", description = "Team or lead not found",
-            content = @Content)
+            content = @Content(mediaType = "application/json", schema = @Schema(implementation = ErrorResponse.class)))
     })
     public ResponseEntity<TeamLeadResponse> getTeamLead(
+            @Parameter(description = "UUID of the team", example = "550e8400-e29b-41d4-a716-446655440000", required = true)
             @PathVariable UUID teamId,
+            @Parameter(hidden = true)
             @AuthenticationPrincipal DevFlowUserDetails userDetails
     ) {
         TeamMember lead = teamService.getTeamLead(teamId, userDetails.getId());
@@ -384,22 +431,25 @@ public class TeamController {
     @Operation(
         summary = "Transfer team leadership",
         description = "Transfers team leadership to an existing team member. Requires organization ADMIN/OWNER or current team LEAD role.",
+        operationId = "transferTeamLeadership",
         security = @SecurityRequirement(name = "bearerAuth")
     )
     @ApiResponses(value = {
         @ApiResponse(responseCode = "200", description = "Leadership transferred successfully",
-            content = @Content(schema = @Schema(implementation = TeamLeadResponse.class))),
+            content = @Content(mediaType = "application/json", schema = @Schema(implementation = TeamLeadResponse.class))),
         @ApiResponse(responseCode = "400", description = "Validation failure, team is archived, target already lead, or suspended",
-            content = @Content),
+            content = @Content(mediaType = "application/json", schema = @Schema(implementation = ErrorResponse.class))),
         @ApiResponse(responseCode = "401", description = "Unauthorized — valid Bearer token required",
-            content = @Content),
+            content = @Content(mediaType = "application/json", schema = @Schema(implementation = ErrorResponse.class))),
         @ApiResponse(responseCode = "403", description = "Forbidden — requires ADMIN, OWNER, or current LEAD role",
-            content = @Content),
+            content = @Content(mediaType = "application/json", schema = @Schema(implementation = ErrorResponse.class))),
         @ApiResponse(responseCode = "404", description = "Team, successor member, or current lead not found",
-            content = @Content)
+            content = @Content(mediaType = "application/json", schema = @Schema(implementation = ErrorResponse.class)))
     })
     public ResponseEntity<TeamLeadResponse> transferLeadership(
+            @Parameter(description = "UUID of the team", example = "550e8400-e29b-41d4-a716-446655440000", required = true)
             @PathVariable UUID teamId,
+            @Parameter(hidden = true)
             @AuthenticationPrincipal DevFlowUserDetails userDetails,
             @Valid @RequestBody TransferTeamLeadershipRequest request
     ) {

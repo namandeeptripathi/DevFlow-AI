@@ -31,11 +31,21 @@ public class CreateTeamRequest {
 
     @NotBlank(message = "Team name is required")
     @Size(max = 100, message = "Team name cannot exceed 100 characters")
-    @Schema(description = "Unique display name of the team within the workspace", example = "Core Backend")
+    @Schema(
+        description = "Unique display name of the team within the workspace",
+        example = "Core Backend",
+        requiredMode = Schema.RequiredMode.REQUIRED,
+        maxLength = 100
+    )
     private String name;
 
     @Size(max = 500, message = "Team description cannot exceed 500 characters")
-    @Schema(description = "Optional description of the team charter and responsibilities", example = "Core backend APIs, microservices, and database models")
+    @Schema(
+        description = "Optional description of the team charter and responsibilities",
+        example = "Core backend APIs, microservices, and database models",
+        requiredMode = Schema.RequiredMode.NOT_REQUIRED,
+        maxLength = 500
+    )
     private String description;
 }
 

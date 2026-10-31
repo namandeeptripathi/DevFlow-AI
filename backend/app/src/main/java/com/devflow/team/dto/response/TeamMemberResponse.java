@@ -28,25 +28,25 @@ import java.util.UUID;
 @Schema(description = "Representation of a team membership")
 public class TeamMemberResponse {
 
-    @Schema(description = "Unique identifier of the membership record", example = "550e8400-e29b-41d4-a716-446655440000")
+    @Schema(description = "Unique identifier of the membership record", example = "550e8400-e29b-41d4-a716-446655440000", requiredMode = Schema.RequiredMode.REQUIRED)
     private UUID id;
 
-    @Schema(description = "UUID of the team", example = "550e8400-e29b-41d4-a716-446655440001")
+    @Schema(description = "UUID of the team", example = "550e8400-e29b-41d4-a716-446655440001", requiredMode = Schema.RequiredMode.REQUIRED)
     private UUID teamId;
 
-    @Schema(description = "UUID of the member user", example = "550e8400-e29b-41d4-a716-446655440002")
+    @Schema(description = "UUID of the member user", example = "550e8400-e29b-41d4-a716-446655440002", requiredMode = Schema.RequiredMode.REQUIRED)
     private UUID userId;
 
-    @Schema(description = "Functional role within the team (LEAD, MEMBER)", example = "MEMBER")
+    @Schema(description = "Functional role within the team (LEAD, MEMBER)", example = "MEMBER", requiredMode = Schema.RequiredMode.REQUIRED)
     private TeamRole role;
 
-    @Schema(description = "Timestamp when the member joined the team", example = "2026-10-31T18:00:00Z")
+    @Schema(description = "Timestamp when the member joined the team", example = "2026-10-31T18:00:00Z", requiredMode = Schema.RequiredMode.REQUIRED)
     private Instant joinedAt;
 
-    @Schema(description = "Email of the member", example = "developer@devflow.com")
+    @Schema(description = "Email of the member", example = "developer@devflow.com", requiredMode = Schema.RequiredMode.NOT_REQUIRED)
     private String email;
 
-    @Schema(description = "Username of the member", example = "developer")
+    @Schema(description = "Username of the member", example = "developer", requiredMode = Schema.RequiredMode.NOT_REQUIRED)
     private String username;
 
     /**

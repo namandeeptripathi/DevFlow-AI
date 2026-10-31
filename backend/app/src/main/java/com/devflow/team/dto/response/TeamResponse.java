@@ -29,28 +29,28 @@ import java.util.UUID;
 @Schema(description = "Representation of an engineering team")
 public class TeamResponse {
 
-    @Schema(description = "Unique identifier of the team", example = "550e8400-e29b-41d4-a716-446655440000")
+    @Schema(description = "Unique identifier of the team", example = "550e8400-e29b-41d4-a716-446655440000", requiredMode = Schema.RequiredMode.REQUIRED)
     private UUID id;
 
-    @Schema(description = "Display name of the team", example = "Core Backend")
+    @Schema(description = "Display name of the team", example = "Core Backend", requiredMode = Schema.RequiredMode.REQUIRED)
     private String name;
 
-    @Schema(description = "UUID of the parent workspace", example = "550e8400-e29b-41d4-a716-446655440001")
+    @Schema(description = "UUID of the parent workspace", example = "550e8400-e29b-41d4-a716-446655440001", requiredMode = Schema.RequiredMode.REQUIRED)
     private UUID workspaceId;
 
-    @Schema(description = "UUID of the tenant organization", example = "550e8400-e29b-41d4-a716-446655440002")
+    @Schema(description = "UUID of the tenant organization", example = "550e8400-e29b-41d4-a716-446655440002", requiredMode = Schema.RequiredMode.REQUIRED)
     private UUID organizationId;
 
-    @Schema(description = "Optional description of the team charter", example = "Core backend APIs and models")
+    @Schema(description = "Optional description of the team charter", example = "Core backend APIs and models", requiredMode = Schema.RequiredMode.NOT_REQUIRED)
     private String description;
 
-    @Schema(description = "Lifecycle status of the team (ACTIVE, ARCHIVED)", example = "ACTIVE")
+    @Schema(description = "Lifecycle status of the team (ACTIVE, ARCHIVED)", example = "ACTIVE", requiredMode = Schema.RequiredMode.REQUIRED)
     private TeamStatus status;
 
-    @Schema(description = "Timestamp when the team was created", example = "2026-10-31T18:00:00Z")
+    @Schema(description = "Timestamp when the team was created", example = "2026-10-31T18:00:00Z", requiredMode = Schema.RequiredMode.REQUIRED)
     private Instant createdAt;
 
-    @Schema(description = "Timestamp when the team was last updated", example = "2026-10-31T18:30:00Z")
+    @Schema(description = "Timestamp when the team was last updated", example = "2026-10-31T18:30:00Z", requiredMode = Schema.RequiredMode.REQUIRED)
     private Instant updatedAt;
 
     /**

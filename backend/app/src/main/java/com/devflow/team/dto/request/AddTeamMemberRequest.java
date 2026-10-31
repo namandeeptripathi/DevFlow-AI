@@ -28,7 +28,11 @@ import java.util.UUID;
 public class AddTeamMemberRequest {
 
     @NotNull(message = "User ID is required")
-    @Schema(description = "UUID of the active organization member to add to the team", example = "550e8400-e29b-41d4-a716-446655440000")
+    @Schema(
+        description = "UUID of the active organization member to add to the team",
+        example = "550e8400-e29b-41d4-a716-446655440000",
+        requiredMode = Schema.RequiredMode.REQUIRED
+    )
     private UUID userId;
 }
 

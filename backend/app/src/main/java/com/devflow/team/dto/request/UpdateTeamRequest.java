@@ -27,11 +27,21 @@ import lombok.ToString;
 public class UpdateTeamRequest {
 
     @Size(max = 100, message = "Team name cannot exceed 100 characters")
-    @Schema(description = "Updated display name of the team", example = "Platform Engineering")
+    @Schema(
+        description = "Updated display name of the team",
+        example = "Platform Engineering",
+        requiredMode = Schema.RequiredMode.NOT_REQUIRED,
+        maxLength = 100
+    )
     private String name;
 
     @Size(max = 500, message = "Team description cannot exceed 500 characters")
-    @Schema(description = "Updated description of the team charter", example = "Platform infrastructure, developer experience, and deployment pipelines")
+    @Schema(
+        description = "Updated description of the team charter",
+        example = "Platform infrastructure, developer experience, and deployment pipelines",
+        requiredMode = Schema.RequiredMode.NOT_REQUIRED,
+        maxLength = 500
+    )
     private String description;
 }
 
