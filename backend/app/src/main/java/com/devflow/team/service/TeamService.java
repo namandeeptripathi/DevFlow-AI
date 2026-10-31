@@ -734,6 +734,253 @@ public class TeamService {
         return updatedLead;
     }
 
+    // ── Resource-Scoped Convenience Operations (Shallow REST Paths) ───────────
+
+    /**
+     * Retrieves a team by its ID using the caller's security context.
+     *
+     * @param teamId the UUID of the team
+     * @param callerUserId the UUID of the caller
+     * @return the retrieved {@link Team}
+     * @throws TeamNotFoundException if the team is not found
+     */
+    @Transactional(readOnly = true)
+    public Team getTeam(UUID teamId, UUID callerUserId) {
+        Objects.requireNonNull(teamId, "teamId must not be null");
+        Objects.requireNonNull(callerUserId, "callerUserId must not be null");
+
+        Team team = teamRepository.findById(teamId)
+                .orElseThrow(() -> {
+                    log.warn("Team [{}] not found", teamId);
+                    return new TeamNotFoundException("Team not found: " + teamId);
+                });
+
+        teamAuthorizationService.requireCanViewTeam(
+                team.getWorkspace().getOrganization().getId(),
+                team.getWorkspace(),
+                callerUserId);
+        return team;
+    }
+
+    /**
+     * Partially updates a team by its ID.
+     *
+     * @param teamId the UUID of the team
+     * @param name optional new name
+     * @param description optional new description
+     * @param callerUserId the UUID of the caller
+     * @return the updated {@link Team}
+     * @throws TeamNotFoundException if the team is not found
+     */
+    @Transactional
+    public Team updateTeam(UUID teamId, String name, String description, UUID callerUserId) {
+        Objects.requireNonNull(teamId, "teamId must not be null");
+        Objects.requireNonNull(callerUserId, "callerUserId must not be null");
+
+        Team team = teamRepository.findById(teamId)
+                .orElseThrow(() -> {
+                    log.warn("Team update rejected: team [{}] not found", teamId);
+                    return new TeamNotFoundException("Team not found: " + teamId);
+                });
+
+        return updateTeam(
+                team.getWorkspace().getOrganization().getId(),
+                team.getWorkspace().getId(),
+                teamId,
+                name,
+                description,
+                callerUserId);
+    }
+
+    /**
+     * Archives a team by its ID.
+     *
+     * @param teamId the UUID of the team
+     * @param callerUserId the UUID of the caller
+     * @return the archived {@link Team}
+     * @throws TeamNotFoundException if the team is not found
+     */
+    @Transactional
+    public Team archiveTeam(UUID teamId, UUID callerUserId) {
+        Objects.requireNonNull(teamId, "teamId must not be null");
+        Objects.requireNonNull(callerUserId, "callerUserId must not be null");
+
+        Team team = teamRepository.findById(teamId)
+                .orElseThrow(() -> {
+                    log.warn("Team archive rejected: team [{}] not found", teamId);
+                    return new TeamNotFoundException("Team not found: " + teamId);
+                });
+
+        return archiveTeam(
+                team.getWorkspace().getOrganization().getId(),
+                team.getWorkspace().getId(),
+                teamId,
+                callerUserId);
+    }
+
+    /**
+     * Adds an organization member to a team by team ID.
+     *
+     * @param teamId the UUID of the team
+     * @param targetUserId the UUID of the user to add
+     * @param callerUserId the UUID of the caller
+     * @return the created {@link TeamMember}
+     * @throws TeamNotFoundException if the team is not found
+     */
+    @Transactional
+    public TeamMember addMember(UUID teamId, UUID targetUserId, UUID callerUserId) {
+        Objects.requireNonNull(teamId, "teamId must not be null");
+        Objects.requireNonNull(targetUserId, "targetUserId must not be null");
+        Objects.requireNonNull(callerUserId, "callerUserId must not be null");
+
+        Team team = teamRepository.findById(teamId)
+                .orElseThrow(() -> {
+                    log.warn("Add member rejected: team [{}] not found", teamId);
+                    return new TeamNotFoundException("Team not found: " + teamId);
+                });
+
+        return addMember(
+                team.getWorkspace().getOrganization().getId(),
+                team.getWorkspace().getId(),
+                teamId,
+                targetUserId,
+                callerUserId);
+    }
+
+    /**
+     * Lists all members of a team by team ID.
+     *
+     * @param teamId the UUID of the team
+     * @param callerUserId the UUID of the caller
+     * @return list of team members
+     * @throws TeamNotFoundException if the team is not found
+     */
+    @Transactional(readOnly = true)
+    public List<TeamMember> listMembers(UUID teamId, UUID callerUserId) {
+        Objects.requireNonNull(teamId, "teamId must not be null");
+        Objects.requireNonNull(callerUserId, "callerUserId must not be null");
+
+        Team team = teamRepository.findById(teamId)
+                .orElseThrow(() -> {
+                    log.warn("List members rejected: team [{}] not found", teamId);
+                    return new TeamNotFoundException("Team not found: " + teamId);
+                });
+
+        return listMembers(
+                team.getWorkspace().getOrganization().getId(),
+                team.getWorkspace().getId(),
+                teamId,
+                callerUserId);
+    }
+
+    /**
+     * Removes a member from a team by team ID.
+     *
+     * @param teamId the UUID of the team
+     * @param targetUserId the UUID of the user to remove
+     * @param callerUserId the UUID of the caller
+     * @throws TeamNotFoundException if the team is not found
+     */
+    @Transactional
+    public void removeMember(UUID teamId, UUID targetUserId, UUID callerUserId) {
+        Objects.requireNonNull(teamId, "teamId must not be null");
+        Objects.requireNonNull(targetUserId, "targetUserId must not be null");
+        Objects.requireNonNull(callerUserId, "callerUserId must not be null");
+
+        Team team = teamRepository.findById(teamId)
+                .orElseThrow(() -> {
+                    log.warn("Remove member rejected: team [{}] not found", teamId);
+                    return new TeamNotFoundException("Team not found: " + teamId);
+                });
+
+        removeMember(
+                team.getWorkspace().getOrganization().getId(),
+                team.getWorkspace().getId(),
+                teamId,
+                targetUserId,
+                callerUserId);
+    }
+
+    /**
+     * Allows the authenticated caller to leave a team by team ID.
+     *
+     * @param teamId the UUID of the team
+     * @param callerUserId the UUID of the caller
+     * @throws TeamNotFoundException if the team is not found
+     */
+    @Transactional
+    public void leaveTeam(UUID teamId, UUID callerUserId) {
+        Objects.requireNonNull(teamId, "teamId must not be null");
+        Objects.requireNonNull(callerUserId, "callerUserId must not be null");
+
+        Team team = teamRepository.findById(teamId)
+                .orElseThrow(() -> {
+                    log.warn("Leave team rejected: team [{}] not found", teamId);
+                    return new TeamNotFoundException("Team not found: " + teamId);
+                });
+
+        leaveTeam(
+                team.getWorkspace().getOrganization().getId(),
+                team.getWorkspace().getId(),
+                teamId,
+                callerUserId);
+    }
+
+    /**
+     * Resolves the designated active team lead by team ID.
+     *
+     * @param teamId the UUID of the team
+     * @param callerUserId the UUID of the caller
+     * @return the lead {@link TeamMember}
+     * @throws TeamNotFoundException if the team is not found
+     */
+    @Transactional(readOnly = true)
+    public TeamMember getTeamLead(UUID teamId, UUID callerUserId) {
+        Objects.requireNonNull(teamId, "teamId must not be null");
+        Objects.requireNonNull(callerUserId, "callerUserId must not be null");
+
+        Team team = teamRepository.findById(teamId)
+                .orElseThrow(() -> {
+                    log.warn("Get team lead rejected: team [{}] not found", teamId);
+                    return new TeamNotFoundException("Team not found: " + teamId);
+                });
+
+        return getTeamLead(
+                team.getWorkspace().getOrganization().getId(),
+                team.getWorkspace().getId(),
+                teamId,
+                callerUserId);
+    }
+
+    /**
+     * Transfers leadership of an active team by team ID.
+     *
+     * @param teamId the UUID of the team
+     * @param targetUserId the UUID of the successor member
+     * @param callerUserId the UUID of the caller
+     * @return the updated successor {@link TeamMember} as new lead
+     * @throws TeamNotFoundException if the team is not found
+     */
+    @Transactional
+    public TeamMember transferLeadership(UUID teamId, UUID targetUserId, UUID callerUserId) {
+        Objects.requireNonNull(teamId, "teamId must not be null");
+        Objects.requireNonNull(targetUserId, "targetUserId must not be null");
+        Objects.requireNonNull(callerUserId, "callerUserId must not be null");
+
+        Team team = teamRepository.findById(teamId)
+                .orElseThrow(() -> {
+                    log.warn("Leadership transfer rejected: team [{}] not found", teamId);
+                    return new TeamNotFoundException("Team not found: " + teamId);
+                });
+
+        return transferLeadership(
+                team.getWorkspace().getOrganization().getId(),
+                team.getWorkspace().getId(),
+                teamId,
+                targetUserId,
+                callerUserId);
+    }
+
     // ── Private Helpers ───────────────────────────────────────────────────────
 
     /**

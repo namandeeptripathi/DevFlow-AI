@@ -3,6 +3,7 @@ package com.devflow.team.repository;
 import com.devflow.team.domain.TeamMember;
 import com.devflow.team.domain.TeamRole;
 import com.devflow.team.domain.TeamStatus;
+import org.springframework.data.jpa.repository.EntityGraph;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
@@ -61,6 +62,7 @@ public interface TeamMemberRepository extends JpaRepository<TeamMember, UUID> {
      * @param userId the UUID of the user
      * @return an {@link Optional} containing the member if found, or empty
      */
+    @EntityGraph(attributePaths = {"user", "team"})
     @Query("""
         SELECT tm FROM TeamMember tm
         WHERE tm.team.organization.id = :organizationId
@@ -110,6 +112,7 @@ public interface TeamMemberRepository extends JpaRepository<TeamMember, UUID> {
      * @param role the team role to query
      * @return an {@link Optional} containing the matching member, or empty
      */
+    @EntityGraph(attributePaths = {"user", "team"})
     Optional<TeamMember> findByTeamIdAndRole(UUID teamId, TeamRole role);
 
     /**
@@ -129,6 +132,7 @@ public interface TeamMemberRepository extends JpaRepository<TeamMember, UUID> {
      * @param teamId the UUID of the team
      * @return an {@link Optional} containing the team lead, or empty
      */
+    @EntityGraph(attributePaths = {"user", "team"})
     @Query("""
         SELECT tm FROM TeamMember tm
         WHERE tm.team.organization.id = :organizationId
@@ -145,6 +149,7 @@ public interface TeamMemberRepository extends JpaRepository<TeamMember, UUID> {
      * @param teamId the UUID of the team
      * @return list of team members
      */
+    @EntityGraph(attributePaths = {"user", "team"})
     List<TeamMember> findByTeamId(UUID teamId);
 
     /**
@@ -154,6 +159,7 @@ public interface TeamMemberRepository extends JpaRepository<TeamMember, UUID> {
      * @param teamId the UUID of the team
      * @return list of team members in the organization
      */
+    @EntityGraph(attributePaths = {"user", "team"})
     @Query("""
         SELECT tm FROM TeamMember tm
         WHERE tm.team.organization.id = :organizationId
