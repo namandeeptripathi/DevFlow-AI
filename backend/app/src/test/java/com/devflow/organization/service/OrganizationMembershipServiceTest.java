@@ -12,6 +12,10 @@ import com.devflow.organization.exception.OrganizationMembershipRequiredExceptio
 import com.devflow.organization.exception.OrganizationNotFoundException;
 import com.devflow.organization.repository.OrganizationMemberRepository;
 import com.devflow.organization.repository.OrganizationRepository;
+import com.devflow.team.domain.TeamRole;
+import com.devflow.team.domain.TeamStatus;
+import com.devflow.team.exception.InvalidTeamOperationException;
+import com.devflow.team.repository.TeamMemberRepository;
 import com.devflow.user.domain.AccountStatus;
 import com.devflow.user.domain.User;
 import com.devflow.user.repository.UserRepository;
@@ -55,6 +59,9 @@ class OrganizationMembershipServiceTest {
     @Mock
     private OrganizationAuthorizationService authorizationService;
 
+    @Mock
+    private TeamMemberRepository teamMemberRepository;
+
     private OrganizationMembershipService membershipService;
 
     private UUID organizationId;
@@ -71,7 +78,8 @@ class OrganizationMembershipServiceTest {
                 organizationMemberRepository,
                 organizationRepository,
                 userRepository,
-                authorizationService
+                authorizationService,
+                teamMemberRepository
         );
 
         organizationId = UUID.randomUUID();
@@ -271,6 +279,39 @@ class OrganizationMembershipServiceTest {
 
             assertThatThrownBy(() -> membershipService.removeMember(organizationId, targetUserId, callerUserId))
                     .isInstanceOf(OrganizationAccessDeniedException.class);
+        }
+
+        @Test
+        @DisplayName("attempting to remove active team lead throws InvalidTeamOperationException")
+        void removeMember_activeTeamLead_throwsInvalidTeamOperationException() {
+            doNothing().when(authorizationService).requireAdminOrOwner(organizationId, callerUserId);
+            when(organizationMemberRepository.findByOrganizationIdAndUserId(organizationId, targetUserId))
+                    .thenReturn(Optional.of(activeDeveloperMember));
+            when(teamMemberRepository.existsByUserIdAndRoleAndOrganizationIdAndTeamStatus(
+                    targetUserId, TeamRole.LEAD, organizationId, TeamStatus.ACTIVE))
+                    .thenReturn(true);
+
+            assertThatThrownBy(() -> membershipService.removeMember(organizationId, targetUserId, callerUserId))
+                    .isInstanceOf(InvalidTeamOperationException.class)
+                    .hasMessageContaining("user is currently an active team lead");
+
+            verify(organizationMemberRepository, never()).delete(any());
+        }
+
+        @Test
+        @DisplayName("removing non-lead cleans up team memberships in the organization")
+        void removeMember_nonLead_cleansUpTeamMemberships() {
+            doNothing().when(authorizationService).requireAdminOrOwner(organizationId, callerUserId);
+            when(organizationMemberRepository.findByOrganizationIdAndUserId(organizationId, targetUserId))
+                    .thenReturn(Optional.of(activeDeveloperMember));
+            when(teamMemberRepository.existsByUserIdAndRoleAndOrganizationIdAndTeamStatus(
+                    targetUserId, TeamRole.LEAD, organizationId, TeamStatus.ACTIVE))
+                    .thenReturn(false);
+
+            membershipService.removeMember(organizationId, targetUserId, callerUserId);
+
+            verify(teamMemberRepository).deleteByUserIdAndOrganizationId(targetUserId, organizationId);
+            verify(organizationMemberRepository).delete(activeDeveloperMember);
         }
     }
 

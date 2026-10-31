@@ -10,10 +10,15 @@ import com.devflow.organization.exception.OrganizationMemberNotFoundException;
 import com.devflow.organization.exception.OrganizationNotFoundException;
 import com.devflow.organization.repository.OrganizationMemberRepository;
 import com.devflow.organization.repository.OrganizationRepository;
+import com.devflow.team.domain.TeamRole;
+import com.devflow.team.domain.TeamStatus;
+import com.devflow.team.exception.InvalidTeamOperationException;
+import com.devflow.team.repository.TeamMemberRepository;
 import com.devflow.user.domain.User;
 import com.devflow.user.repository.UserRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -56,12 +61,15 @@ public class OrganizationMembershipService {
     private final OrganizationRepository organizationRepository;
     private final UserRepository userRepository;
     private final OrganizationAuthorizationService authorizationService;
+    private final TeamMemberRepository teamMemberRepository;
 
+    @Autowired
     public OrganizationMembershipService(
             OrganizationMemberRepository organizationMemberRepository,
             OrganizationRepository organizationRepository,
             UserRepository userRepository,
-            OrganizationAuthorizationService authorizationService
+            OrganizationAuthorizationService authorizationService,
+            TeamMemberRepository teamMemberRepository
     ) {
         this.organizationMemberRepository = Objects.requireNonNull(
                 organizationMemberRepository, "organizationMemberRepository must not be null");
@@ -71,6 +79,8 @@ public class OrganizationMembershipService {
                 userRepository, "userRepository must not be null");
         this.authorizationService = Objects.requireNonNull(
                 authorizationService, "authorizationService must not be null");
+        this.teamMemberRepository = Objects.requireNonNull(
+                teamMemberRepository, "teamMemberRepository must not be null");
     }
 
     // ── Commands ──────────────────────────────────────────────────────────────
@@ -167,6 +177,19 @@ public class OrganizationMembershipService {
                         "Cannot remove the last active OWNER from organization [" + organizationId + "]");
             }
         }
+
+        // Verify team lead invariant: active team leads cannot be removed without leadership transfer
+        if (teamMemberRepository.existsByUserIdAndRoleAndOrganizationIdAndTeamStatus(
+                targetUserId, TeamRole.LEAD, organizationId, TeamStatus.ACTIVE)) {
+            log.warn("Remove member rejected: user [{}] is an active team lead in organization [{}]",
+                    targetUserId, organizationId);
+            throw new InvalidTeamOperationException(
+                    "Cannot remove user [" + targetUserId + "] from organization [" + organizationId + "]: " +
+                    "user is currently an active team lead. Transfer team leadership first.");
+        }
+
+        // Clean up any team memberships held by the user in this organization
+        teamMemberRepository.deleteByUserIdAndOrganizationId(targetUserId, organizationId);
 
         organizationMemberRepository.delete(member);
         log.info("Removed user [{}] from organization [{}] by caller [{}]", targetUserId, organizationId, callerUserId);
