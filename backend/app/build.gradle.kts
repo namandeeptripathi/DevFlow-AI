@@ -31,6 +31,9 @@ dependencyManagement {
 
 dependencies {
 
+    // ── Internal Domain Modules ───────────────────────────────────────────────
+    implementation(project(":devflow-auth"))
+
     // ── Core Spring Boot Starters ─────────────────────────────────────────────
     implementation(libs.spring.boot.starter.web)
     implementation(libs.spring.boot.starter.data.jpa)

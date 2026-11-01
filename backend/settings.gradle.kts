@@ -10,10 +10,10 @@ rootProject.name = "devflow-backend"
 // Domain modules will be added incrementally as they are scaffolded.
 // ──────────────────────────────────────────────────────────────────────────────
 include(":app")
+include(":devflow-auth")
 
 // Future domain modules — uncomment as they are scaffolded:
 // include(":devflow-shared-kernel")
-// include(":devflow-auth")
 // include(":devflow-project-management")
 // include(":devflow-repository-intelligence")
 // include(":devflow-ai-engine")
