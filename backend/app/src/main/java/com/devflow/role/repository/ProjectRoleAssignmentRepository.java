@@ -129,4 +129,43 @@ public interface ProjectRoleAssignmentRepository extends JpaRepository<ProjectRo
         @Param("userId") UUID userId,
         @Param("now") Instant now
     );
+
+    /**
+     * Finds any unrevoked assignments for the specified project, user, and role that have expired.
+     *
+     * @param projectId project UUID
+     * @param userId user UUID
+     * @param roleId role UUID
+     * @param now reference instant
+     * @return list of expired unrevoked assignments
+     */
+    @Query("""
+        SELECT a FROM ProjectRoleAssignment a
+        WHERE a.projectId = :projectId
+          AND a.user.id = :userId
+          AND a.role.id = :roleId
+          AND a.revokedAt IS NULL
+          AND a.expiresAt IS NOT NULL
+          AND a.expiresAt <= :now
+    """)
+    List<ProjectRoleAssignment> findExpiredUnrevoked(
+        @Param("projectId") UUID projectId,
+        @Param("userId") UUID userId,
+        @Param("roleId") UUID roleId,
+        @Param("now") Instant now
+    );
+
+    /**
+     * Finds all unrevoked project assignments that have passed their expiration timestamp.
+     *
+     * @param now reference instant
+     * @return list of stale unrevoked assignments
+     */
+    @Query("""
+        SELECT a FROM ProjectRoleAssignment a
+        WHERE a.revokedAt IS NULL
+          AND a.expiresAt IS NOT NULL
+          AND a.expiresAt <= :now
+    """)
+    List<ProjectRoleAssignment> findStaleUnrevoked(@Param("now") Instant now);
 }

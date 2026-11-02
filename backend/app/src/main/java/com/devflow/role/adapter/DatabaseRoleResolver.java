@@ -104,9 +104,13 @@ public class DatabaseRoleResolver implements RoleResolver {
             roles.add(assignment.getRole().toDomainRole());
         }
 
-        // 3. Backward compatibility: if no explicit assignment exists yet, map legacy membership role
+        // 3. Backward compatibility: legacy membership role fallback strictly for unmigrated members
+        // without any role assignment history in this organization (ADR-001, Stage 4.1).
         if (roles.isEmpty() && member.getRole() != null) {
-            roles.add(mapLegacyOrganizationRole(member.getRole()));
+            boolean hasTransitioned = orgAssignmentRepository.hasAnyAssignments(organizationId, userId);
+            if (!hasTransitioned) {
+                roles.add(mapLegacyOrganizationRole(member.getRole()));
+            }
         }
 
         return Collections.unmodifiableSet(roles);

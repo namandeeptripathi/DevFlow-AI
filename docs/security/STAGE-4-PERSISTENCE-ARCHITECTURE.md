@@ -149,6 +149,15 @@ erDiagram
    - Scope check and foreign key: `role_scope = 'PROJECT'` referencing `roles(id, scope)`.
    - Partial unique index: `uk_project_role_assignments_active (project_id, user_id, role_id) WHERE revoked_at IS NULL`.
 
+> [!NOTE]
+> **Project-to-Organization Database Integrity & Architectural Boundary:**
+> In the current database schema (migrations V1–V13), a `projects` table does not yet exist (it is scheduled for introduction in the forthcoming project management module). As a result, a composite foreign key `(project_id, organization_id) REFERENCES projects(id, organization_id)` cannot be defined in PostgreSQL at this stage without fabricating out-of-order schema.
+>
+> To guarantee complete security and tenant isolation without misrepresenting database-level enforcement:
+> 1. **Database Level:** User-tenant membership is strictly enforced via composite foreign key `fk_project_role_assignments_org_user (organization_id, user_id) REFERENCES organization_members(organization_id, user_id)`. PostgreSQL immediately rejects any project assignment if the user is not a member of the enclosing organization.
+> 2. **Application Boundary Level:** Project-to-organization hierarchy validation is strictly enforced at the application boundary via the `TenantBoundaryValidator` SPI in `RoleAssignmentService.assignProjectRole` and `DatabaseProjectAssignmentValidator.isAssignedToProject`.
+> 3. **Future Migration:** When the `projects` table is introduced in the project management module, a composite foreign key `(project_id, organization_id) REFERENCES projects(id, organization_id)` will be added in that migration.
+
 ---
 
 ## 3. Security Invariants Enforced at the Database Layer
@@ -208,6 +217,8 @@ Scoped role assignments support a complete, audited lifecycle:
 - **Active Deduplication:** Partial unique indexes on `(organization_id, user_id, role_id)` and `(project_id, user_id, role_id)` where `revoked_at IS NULL` prevent concurrent duplicate active grants.
 - **Audit Preservation:** Revocation never physically deletes the row; it sets `revoked_by`, `revoked_at`, and `revocation_reason`, preserving the forensic security audit trail.
 - **Immediate Invalidation:** Active evaluations instantly exclude assignments as soon as `revoked_at` is populated or `expires_at` is reached.
+- **Expired Assignment Superseding (Stage 4.1):** PostgreSQL partial unique indexes cannot use dynamic functions like `now()` in index predicates. Consequently, an expired assignment with `revoked_at IS NULL` occupies a slot in `uk_org_role_assignments_active`. To allow legitimate re-assignment without index violation while preserving history, `RoleAssignmentService` executes a transactional superseding step before inserting a new assignment: any expired unrevoked rows for the principal and role are marked `revoked_at = now`, `revocation_reason = 'EXPIRED_SUPERSEDED'`, and `revoked_by = assignedByUser`.
+- **Maintenance Archival:** Proactive background reconciliation is provided via `RoleAssignmentService.expireStaleAssignments(Instant now)`, batch-archiving stale expired records with reason `'EXPIRED'`.
 
 ---
 
@@ -252,15 +263,26 @@ WHERE om.status = 'ACTIVE'
 ON CONFLICT DO NOTHING;
 ```
 
-### 5.3 Fallback Adapter Compatibility
+### 5.3 Fallback Adapter Compatibility & Unambiguous Source of Truth (Stage 4.1)
 
-`DatabaseRoleResolver` queries persistent `organization_role_assignments`. In the event an active member does not yet have an explicit assignment record (e.g., during transition phases), `DatabaseRoleResolver.mapLegacyOrganizationRole()` seamlessly maps the member's persisted role:
-- `OrganizationRole.OWNER` $\rightarrow$ `Role.ORGANIZATION_OWNER`
-- `OrganizationRole.ADMIN` $\rightarrow$ `Role.ORGANIZATION_ADMIN`
-- `OrganizationRole.DEVELOPER` $\rightarrow$ `Role.ORGANIZATION_MEMBER`
-- `OrganizationRole.VIEWER` $\rightarrow$ `Role.ORGANIZATION_VIEWER`
+To prevent security vulnerabilities where revoking an explicit assignment silently resurrects revoked privileges via legacy fallback:
+1. **Unambiguous Source of Truth:** `organization_role_assignments` is the authoritative source of truth once a member has any recorded assignment history in that organization (`orgAssignmentRepository.hasAnyAssignments(organizationId, userId)`).
+2. **Strict Legacy Fallback Condition:** `DatabaseRoleResolver.mapLegacyOrganizationRole()` is invoked strictly when `!hasAnyAssignments(organizationId, userId)`:
+   - `OrganizationRole.OWNER` $\rightarrow$ `Role.ORGANIZATION_OWNER`
+   - `OrganizationRole.ADMIN` $\rightarrow$ `Role.ORGANIZATION_ADMIN`
+   - `OrganizationRole.DEVELOPER` $\rightarrow$ `Role.ORGANIZATION_MEMBER`
+   - `OrganizationRole.VIEWER` $\rightarrow$ `Role.ORGANIZATION_VIEWER`
+3. **Revocation Fail-Closed:** If an active member's explicit assignment is revoked (or expired) and they hold no other active assignments, `DatabaseRoleResolver` returns an empty set. Legacy fallback is disabled because assignment history exists, preventing privilege resurrecting attacks.
+4. **Suspended Membership:** If an organization membership status is `SUSPENDED` or `INVITED`, `DatabaseRoleResolver` immediately returns an empty set, failing closed.
 
-If an organization membership status is `SUSPENDED` or `INVITED`, `DatabaseRoleResolver` immediately returns an empty set, failing closed.
+### 5.4 Scoped Role Assignment Authorization (ADR-001 §2.1, Stage 4.1 §4)
+
+Role assignment and revocation in `RoleAssignmentService` strictly enforce authoritative policy rules:
+- **Billing Isolation:** Only `ORGANIZATION_OWNER` can grant or revoke `ORGANIZATION_BILLING`. Organization admins attempting to grant or revoke billing roles are denied with `RoleAssignmentAccessDeniedException`.
+- **Owner Role Governance:** Only `ORGANIZATION_OWNER` can grant or revoke `ORGANIZATION_OWNER`. Admins cannot escalate themselves or others to ownership.
+- **Sole Active Owner Protection:** Revoking the last remaining active `ORGANIZATION_OWNER` in a tenant is strictly rejected.
+- **Project Role Delegation:** Project assignments require `ORGANIZATION_OWNER`, `ORGANIZATION_ADMIN`, or an active `PROJECT_LEAD` on that specific project. Project leads cannot manage roles on projects where they do not hold lead authority.
+- **Non-Bypassable Authority:** Authority is evaluated from database-backed persistent roles of the authenticated actor (`assignedByUserId`), preventing caller-supplied claims or headers from bypassing assignment checks.
 
 ---
 

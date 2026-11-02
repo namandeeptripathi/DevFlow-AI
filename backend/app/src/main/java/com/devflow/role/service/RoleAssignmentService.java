@@ -1,16 +1,19 @@
 package com.devflow.role.service;
 
 import com.devflow.modules.auth.domain.Role;
+import com.devflow.modules.auth.evaluator.TenantBoundaryValidator;
 import com.devflow.organization.domain.Organization;
 import com.devflow.organization.domain.OrganizationMember;
 import com.devflow.organization.domain.OrganizationMembershipStatus;
 import com.devflow.organization.exception.OrganizationNotFoundException;
 import com.devflow.organization.repository.OrganizationMemberRepository;
 import com.devflow.organization.repository.OrganizationRepository;
+import com.devflow.role.adapter.DatabaseRoleResolver;
 import com.devflow.role.domain.OrganizationRoleAssignment;
 import com.devflow.role.domain.ProjectRoleAssignment;
 import com.devflow.role.domain.RoleEntity;
 import com.devflow.role.exception.InvalidRoleAssignmentException;
+import com.devflow.role.exception.RoleAssignmentAccessDeniedException;
 import com.devflow.role.exception.RoleAssignmentAlreadyExistsException;
 import com.devflow.role.exception.RoleAssignmentNotFoundException;
 import com.devflow.role.repository.OrganizationRoleAssignmentRepository;
@@ -29,18 +32,22 @@ import java.time.Instant;
 import java.util.Collections;
 import java.util.List;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import java.util.stream.Collectors;
 
 /**
- * Application service managing the lifecycle of scoped role assignments (Stage 4).
+ * Application service managing the lifecycle of scoped role assignments (Stage 4 & Stage 4.1).
  *
  * <p>Enforces core security invariants:
  * <ul>
  *   <li>Scope boundaries: Organization roles cannot be assigned to projects, and project roles cannot be assigned to organizations.</li>
- *   <li>Tenant isolation: Project roles require verified active organization membership in the enclosing tenant.</li>
+ *   <li>Tenant isolation: Project roles require verified active organization membership in the enclosing tenant and optional {@link TenantBoundaryValidator}.</li>
+ *   <li>Role assignment authorization: Only organization owners can grant/revoke BILLING and OWNER roles; admins cannot escalate.</li>
+ *   <li>Project assignment authority: Requires organization owner/admin or project lead authority.</li>
  *   <li>Active uniqueness: Prevents duplicate active assignments for the same principal and scope.</li>
+ *   <li>Expired assignment superseding: Automatically retires expired assignments to satisfy active partial unique indexes while maintaining audit trails.</li>
  *   <li>Audit preservation: Tracks assignment and revocation actors and timestamps.</li>
  * </ul>
  */
@@ -55,6 +62,7 @@ public class RoleAssignmentService {
     private final OrganizationRepository organizationRepository;
     private final OrganizationMemberRepository organizationMemberRepository;
     private final UserRepository userRepository;
+    private TenantBoundaryValidator tenantBoundaryValidator;
 
     @Autowired
     public RoleAssignmentService(
@@ -63,7 +71,8 @@ public class RoleAssignmentService {
             RoleRepository roleRepository,
             OrganizationRepository organizationRepository,
             OrganizationMemberRepository organizationMemberRepository,
-            UserRepository userRepository
+            UserRepository userRepository,
+            @Autowired(required = false) TenantBoundaryValidator tenantBoundaryValidator
     ) {
         this.orgAssignmentRepository = Objects.requireNonNull(orgAssignmentRepository, "orgAssignmentRepository must not be null");
         this.projectAssignmentRepository = Objects.requireNonNull(projectAssignmentRepository, "projectAssignmentRepository must not be null");
@@ -71,6 +80,11 @@ public class RoleAssignmentService {
         this.organizationRepository = Objects.requireNonNull(organizationRepository, "organizationRepository must not be null");
         this.organizationMemberRepository = Objects.requireNonNull(organizationMemberRepository, "organizationMemberRepository must not be null");
         this.userRepository = Objects.requireNonNull(userRepository, "userRepository must not be null");
+        this.tenantBoundaryValidator = tenantBoundaryValidator;
+    }
+
+    public void setTenantBoundaryValidator(TenantBoundaryValidator tenantBoundaryValidator) {
+        this.tenantBoundaryValidator = tenantBoundaryValidator;
     }
 
     // ── Organization Role Assignments ─────────────────────────────────────────
@@ -111,7 +125,7 @@ public class RoleAssignmentService {
         User assignedByUser = userRepository.findById(assignedByUserId)
                 .orElseThrow(() -> new UserProfileNotFoundException("Assigned-by user not found: " + assignedByUserId));
 
-        // Enforce active organization membership requirement
+        // Enforce active organization membership requirement for target user
         OrganizationMember member = organizationMemberRepository.findByOrganizationIdAndUserId(organizationId, targetUserId)
                 .orElseThrow(() -> new InvalidRoleAssignmentException(
                         "User [" + targetUserId + "] is not a member of organization [" + organizationId + "]"));
@@ -121,6 +135,27 @@ public class RoleAssignmentService {
                     "User [" + targetUserId + "] membership status is [" + member.getStatus() + "]; must be ACTIVE to receive roles");
         }
 
+        // ── Authorization Checks for assignedByUserId (ADR-001 §2.1, Stage 4.1 §4) ─
+        Set<Role> callerRoles = getActiveOrganizationRoles(organizationId, assignedByUserId);
+
+        boolean isCallerOwner = callerRoles.contains(Role.ORGANIZATION_OWNER);
+        boolean isCallerAdmin = callerRoles.contains(Role.ORGANIZATION_ADMIN);
+
+        if (!isCallerOwner && !isCallerAdmin) {
+            throw new RoleAssignmentAccessDeniedException(
+                    "User [" + assignedByUserId + "] is not authorized to assign roles in organization [" + organizationId + "]. Requires ORGANIZATION_OWNER or ORGANIZATION_ADMIN.");
+        }
+
+        if (role == Role.ORGANIZATION_BILLING && !isCallerOwner) {
+            throw new RoleAssignmentAccessDeniedException(
+                    "Only ORGANIZATION_OWNER can grant ORGANIZATION_BILLING role. User [" + assignedByUserId + "] is not an owner.");
+        }
+
+        if (role == Role.ORGANIZATION_OWNER && !isCallerOwner) {
+            throw new RoleAssignmentAccessDeniedException(
+                    "Only ORGANIZATION_OWNER can grant ORGANIZATION_OWNER role. User [" + assignedByUserId + "] is not an owner.");
+        }
+
         RoleEntity roleEntity = roleRepository.findByName(role.name())
                 .orElseThrow(() -> new IllegalStateException("Canonical role not found in catalog: " + role.name()));
 
@@ -128,6 +163,14 @@ public class RoleAssignmentService {
         if (orgAssignmentRepository.hasActiveAssignment(organizationId, targetUserId, roleEntity.getId(), now)) {
             throw new RoleAssignmentAlreadyExistsException(
                     "User [" + targetUserId + "] already holds an active [" + role.name() + "] assignment in organization [" + organizationId + "]");
+        }
+
+        // Supersede any expired unrevoked assignments for this role to satisfy unique index uk_org_role_assignments_active
+        List<OrganizationRoleAssignment> expiredAssignments = orgAssignmentRepository.findExpiredUnrevoked(
+                organizationId, targetUserId, roleEntity.getId(), now);
+        for (OrganizationRoleAssignment expired : expiredAssignments) {
+            expired.revoke(assignedByUser, "EXPIRED_SUPERSEDED", now);
+            orgAssignmentRepository.save(expired);
         }
 
         OrganizationRoleAssignment assignment = OrganizationRoleAssignment.builder()
@@ -171,6 +214,35 @@ public class RoleAssignmentService {
         User revokedByUser = userRepository.findById(revokedByUserId)
                 .orElseThrow(() -> new UserProfileNotFoundException("Revoked-by user not found: " + revokedByUserId));
 
+        // ── Authorization Checks for revokedByUserId (ADR-001 §2.1, Stage 4.1 §4) ─
+        Set<Role> callerRoles = getActiveOrganizationRoles(organizationId, revokedByUserId);
+
+        boolean isCallerOwner = callerRoles.contains(Role.ORGANIZATION_OWNER);
+        boolean isCallerAdmin = callerRoles.contains(Role.ORGANIZATION_ADMIN);
+
+        if (!isCallerOwner && !isCallerAdmin) {
+            throw new RoleAssignmentAccessDeniedException(
+                    "User [" + revokedByUserId + "] is not authorized to revoke roles in organization [" + organizationId + "]. Requires ORGANIZATION_OWNER or ORGANIZATION_ADMIN.");
+        }
+
+        if (role == Role.ORGANIZATION_BILLING && !isCallerOwner) {
+            throw new RoleAssignmentAccessDeniedException(
+                    "Only ORGANIZATION_OWNER can revoke ORGANIZATION_BILLING role. User [" + revokedByUserId + "] is not an owner.");
+        }
+
+        if (role == Role.ORGANIZATION_OWNER) {
+            if (!isCallerOwner) {
+                throw new RoleAssignmentAccessDeniedException(
+                        "Only ORGANIZATION_OWNER can revoke ORGANIZATION_OWNER role. User [" + revokedByUserId + "] is not an owner.");
+            }
+            Instant now = Instant.now();
+            long activeOwners = orgAssignmentRepository.countActiveOwners(organizationId, now);
+            if (activeOwners <= 1) {
+                throw new RoleAssignmentAccessDeniedException(
+                        "Cannot revoke sole active ORGANIZATION_OWNER from organization [" + organizationId + "]");
+            }
+        }
+
         RoleEntity roleEntity = roleRepository.findByName(role.name())
                 .orElseThrow(() -> new IllegalStateException("Canonical role not found in catalog: " + role.name()));
 
@@ -199,20 +271,29 @@ public class RoleAssignmentService {
         Objects.requireNonNull(userId, "userId must not be null");
 
         // Verify active organization membership
-        boolean isMemberActive = organizationMemberRepository.findByOrganizationIdAndUserId(organizationId, userId)
-                .map(m -> m.getStatus() == OrganizationMembershipStatus.ACTIVE)
-                .orElse(false);
+        Optional<OrganizationMember> memberOpt = organizationMemberRepository
+                .findByOrganizationIdAndUserId(organizationId, userId);
 
-        if (!isMemberActive) {
+        if (memberOpt.isEmpty() || memberOpt.get().getStatus() != OrganizationMembershipStatus.ACTIVE) {
             return Collections.emptySet();
         }
 
         List<OrganizationRoleAssignment> active = orgAssignmentRepository.findActiveByOrganizationIdAndUserId(
                 organizationId, userId, Instant.now());
 
-        return active.stream()
+        Set<Role> roles = active.stream()
                 .map(a -> a.getRole().toDomainRole())
-                .collect(Collectors.toUnmodifiableSet());
+                .collect(Collectors.toSet());
+
+        // Backward compatibility: legacy membership role fallback strictly for unmigrated members
+        if (roles.isEmpty() && memberOpt.get().getRole() != null) {
+            boolean hasTransitioned = orgAssignmentRepository.hasAnyAssignments(organizationId, userId);
+            if (!hasTransitioned) {
+                roles.add(DatabaseRoleResolver.mapLegacyOrganizationRole(memberOpt.get().getRole()));
+            }
+        }
+
+        return Collections.unmodifiableSet(roles);
     }
 
     // ── Project Role Assignments ──────────────────────────────────────────────
@@ -247,6 +328,12 @@ public class RoleAssignmentService {
             throw new InvalidRoleAssignmentException("Cannot assign non-project role to project: " + role);
         }
 
+        // Tenant boundary check: Project must belong to the organization (if validator present)
+        if (tenantBoundaryValidator != null && !tenantBoundaryValidator.isProjectInOrganization(organizationId, projectId)) {
+            throw new InvalidRoleAssignmentException(
+                    "Tenant boundary violation: Project [" + projectId + "] does not belong to organization [" + organizationId + "]");
+        }
+
         Organization org = organizationRepository.findById(organizationId)
                 .orElseThrow(() -> new OrganizationNotFoundException("Organization not found: " + organizationId));
 
@@ -266,6 +353,16 @@ public class RoleAssignmentService {
                     "Cannot assign project role: user [" + targetUserId + "] membership is [" + member.getStatus() + "] (ACTIVE required)");
         }
 
+        // ── Authorization Checks for assignedByUserId ────────────────────────────
+        Set<Role> callerOrgRoles = getActiveOrganizationRoles(organizationId, assignedByUserId);
+        boolean isOrgAdmin = callerOrgRoles.contains(Role.ORGANIZATION_OWNER) || callerOrgRoles.contains(Role.ORGANIZATION_ADMIN);
+        boolean isProjectLead = isOrgAdmin || getActiveProjectRoles(organizationId, projectId, assignedByUserId).contains(Role.PROJECT_LEAD);
+
+        if (!isProjectLead) {
+            throw new RoleAssignmentAccessDeniedException(
+                    "User [" + assignedByUserId + "] is not authorized to assign project roles in project [" + projectId + "]. Requires ORGANIZATION_OWNER, ORGANIZATION_ADMIN, or PROJECT_LEAD.");
+        }
+
         RoleEntity roleEntity = roleRepository.findByName(role.name())
                 .orElseThrow(() -> new IllegalStateException("Canonical role not found in catalog: " + role.name()));
 
@@ -273,6 +370,14 @@ public class RoleAssignmentService {
         if (projectAssignmentRepository.findActiveByProjectIdAndUserIdAndRoleId(projectId, targetUserId, roleEntity.getId(), now).isPresent()) {
             throw new RoleAssignmentAlreadyExistsException(
                     "User [" + targetUserId + "] already holds an active [" + role.name() + "] assignment in project [" + projectId + "]");
+        }
+
+        // Supersede any expired unrevoked assignments for this role in the project
+        List<ProjectRoleAssignment> expiredAssignments = projectAssignmentRepository.findExpiredUnrevoked(
+                projectId, targetUserId, roleEntity.getId(), now);
+        for (ProjectRoleAssignment expired : expiredAssignments) {
+            expired.revoke(assignedByUser, "EXPIRED_SUPERSEDED", now);
+            projectAssignmentRepository.save(expired);
         }
 
         ProjectRoleAssignment assignment = ProjectRoleAssignment.builder()
@@ -318,8 +423,24 @@ public class RoleAssignmentService {
         Objects.requireNonNull(role, "role must not be null");
         Objects.requireNonNull(revokedByUserId, "revokedByUserId must not be null");
 
+        // Tenant boundary check: Project must belong to the organization (if validator present)
+        if (tenantBoundaryValidator != null && !tenantBoundaryValidator.isProjectInOrganization(organizationId, projectId)) {
+            throw new InvalidRoleAssignmentException(
+                    "Tenant boundary violation: Project [" + projectId + "] does not belong to organization [" + organizationId + "]");
+        }
+
         User revokedByUser = userRepository.findById(revokedByUserId)
                 .orElseThrow(() -> new UserProfileNotFoundException("Revoked-by user not found: " + revokedByUserId));
+
+        // ── Authorization Checks for revokedByUserId ─────────────────────────────
+        Set<Role> callerOrgRoles = getActiveOrganizationRoles(organizationId, revokedByUserId);
+        boolean isOrgAdmin = callerOrgRoles.contains(Role.ORGANIZATION_OWNER) || callerOrgRoles.contains(Role.ORGANIZATION_ADMIN);
+        boolean isProjectLead = isOrgAdmin || getActiveProjectRoles(organizationId, projectId, revokedByUserId).contains(Role.PROJECT_LEAD);
+
+        if (!isProjectLead) {
+            throw new RoleAssignmentAccessDeniedException(
+                    "User [" + revokedByUserId + "] is not authorized to revoke project roles in project [" + projectId + "]. Requires ORGANIZATION_OWNER, ORGANIZATION_ADMIN, or PROJECT_LEAD.");
+        }
 
         RoleEntity roleEntity = roleRepository.findByName(role.name())
                 .orElseThrow(() -> new IllegalStateException("Canonical role not found in catalog: " + role.name()));
@@ -366,5 +487,29 @@ public class RoleAssignmentService {
         return active.stream()
                 .map(a -> a.getRole().toDomainRole())
                 .collect(Collectors.toUnmodifiableSet());
+    }
+
+    /**
+     * Maintenance operation to mark any stale expired assignments as revoked.
+     *
+     * @param now reference instant
+     * @return count of newly archived assignments
+     */
+    @Transactional
+    public int expireStaleAssignments(Instant now) {
+        Objects.requireNonNull(now, "now must not be null");
+        List<OrganizationRoleAssignment> staleOrg = orgAssignmentRepository.findStaleUnrevoked(now);
+        for (OrganizationRoleAssignment a : staleOrg) {
+            a.revoke(a.getAssignedBy(), "EXPIRED", now);
+            orgAssignmentRepository.save(a);
+        }
+
+        List<ProjectRoleAssignment> staleProj = projectAssignmentRepository.findStaleUnrevoked(now);
+        for (ProjectRoleAssignment a : staleProj) {
+            a.revoke(a.getAssignedBy(), "EXPIRED", now);
+            projectAssignmentRepository.save(a);
+        }
+
+        return staleOrg.size() + staleProj.size();
     }
 }

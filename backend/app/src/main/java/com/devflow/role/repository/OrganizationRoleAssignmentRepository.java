@@ -123,4 +123,80 @@ public interface OrganizationRoleAssignmentRepository extends JpaRepository<Orga
         @Param("roleId") UUID roleId,
         @Param("now") Instant now
     );
+
+    /**
+     * Checks if any assignment records (active, revoked, or expired) exist for this user in this organization.
+     * Indicates whether the user has transitioned to the persistent role assignment model.
+     *
+     * @param organizationId tenant organization UUID
+     * @param userId user UUID
+     * @return true if assignment records exist; false otherwise
+     */
+    @Query("""
+        SELECT COUNT(a) > 0 FROM OrganizationRoleAssignment a
+        WHERE a.organization.id = :organizationId
+          AND a.user.id = :userId
+    """)
+    boolean hasAnyAssignments(
+        @Param("organizationId") UUID organizationId,
+        @Param("userId") UUID userId
+    );
+
+    /**
+     * Finds any unrevoked assignments for the specified organization, user, and role that have expired.
+     *
+     * @param organizationId tenant organization UUID
+     * @param userId user UUID
+     * @param roleId role UUID
+     * @param now reference instant
+     * @return list of expired unrevoked assignments
+     */
+    @Query("""
+        SELECT a FROM OrganizationRoleAssignment a
+        WHERE a.organization.id = :organizationId
+          AND a.user.id = :userId
+          AND a.role.id = :roleId
+          AND a.revokedAt IS NULL
+          AND a.expiresAt IS NOT NULL
+          AND a.expiresAt <= :now
+    """)
+    List<OrganizationRoleAssignment> findExpiredUnrevoked(
+        @Param("organizationId") UUID organizationId,
+        @Param("userId") UUID userId,
+        @Param("roleId") UUID roleId,
+        @Param("now") Instant now
+    );
+
+    /**
+     * Finds all unrevoked assignments across all organizations that have passed their expiration timestamp.
+     *
+     * @param now reference instant
+     * @return list of stale unrevoked assignments
+     */
+    @Query("""
+        SELECT a FROM OrganizationRoleAssignment a
+        WHERE a.revokedAt IS NULL
+          AND a.expiresAt IS NOT NULL
+          AND a.expiresAt <= :now
+    """)
+    List<OrganizationRoleAssignment> findStaleUnrevoked(@Param("now") Instant now);
+
+    /**
+     * Counts active ORGANIZATION_OWNER assignments in an organization.
+     *
+     * @param organizationId tenant organization UUID
+     * @param now reference instant
+     * @return count of active owner assignments
+     */
+    @Query("""
+        SELECT COUNT(a) FROM OrganizationRoleAssignment a
+        WHERE a.organization.id = :organizationId
+          AND a.role.name = 'ORGANIZATION_OWNER'
+          AND a.revokedAt IS NULL
+          AND (a.expiresAt IS NULL OR a.expiresAt > :now)
+    """)
+    long countActiveOwners(
+        @Param("organizationId") UUID organizationId,
+        @Param("now") Instant now
+    );
 }

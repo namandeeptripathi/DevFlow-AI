@@ -23,7 +23,9 @@ import com.devflow.role.domain.OrganizationRoleAssignment;
 import com.devflow.role.domain.ProjectRoleAssignment;
 import com.devflow.role.domain.RoleEntity;
 import com.devflow.role.exception.InvalidRoleAssignmentException;
+import com.devflow.role.exception.RoleAssignmentAccessDeniedException;
 import com.devflow.role.exception.RoleAssignmentAlreadyExistsException;
+import com.devflow.modules.auth.evaluator.TenantBoundaryValidator;
 import com.devflow.role.repository.OrganizationRoleAssignmentRepository;
 import com.devflow.role.repository.ProjectRoleAssignmentRepository;
 import com.devflow.role.repository.RoleRepository;
@@ -538,5 +540,298 @@ class ScopedRoleAssignmentDatabaseIntegrationTest {
 
         AuthorizationDecision ownerDecision = evaluator.authorize(ownerProjectReq);
         assertThat(ownerDecision.allowed()).isTrue();
+    }
+
+    // ── Stage 4.1 Security Hardening Tests ────────────────────────────────────
+
+    @Test
+    @DisplayName("Stage 4.1 §1: Revocation must not restore revoked privilege through legacy fallback")
+    void shouldNotRestoreRevokedPrivilegeThroughLegacyFallback() {
+        // 1. User has active legacy ADMIN role in organization_members
+        User legacyAdmin = userRepository.save(User.builder()
+                .email("legacyadmin-" + UUID.randomUUID() + "@devflow.com")
+                .username("legadm_" + UUID.randomUUID().toString().substring(0, 8))
+                .passwordHash("hashed")
+                .accountStatus(AccountStatus.ACTIVE)
+                .emailVerified(true)
+                .build());
+
+        organizationMemberRepository.save(OrganizationMember.builder()
+                .organization(orgA)
+                .user(legacyAdmin)
+                .role(OrganizationRole.ADMIN)
+                .status(OrganizationMembershipStatus.ACTIVE)
+                .build());
+
+        // Prior to explicit assignment, legacy ADMIN resolves to ORGANIZATION_ADMIN
+        Set<Role> rolesInitial = databaseRoleResolver.resolveRoles(
+                legacyAdmin.getId(), OrganizationAuthorizationContext.of(orgA.getId()));
+        assertThat(rolesInitial).containsExactly(Role.ORGANIZATION_ADMIN);
+
+        // 2. An explicit role assignment is created
+        OrganizationRoleAssignment assignment = roleAssignmentService.assignOrganizationRole(
+                orgA.getId(), legacyAdmin.getId(), Role.ORGANIZATION_ADMIN, owner.getId(), null);
+        assertThat(assignment.isActive()).isTrue();
+
+        // 3. That explicit assignment is revoked
+        roleAssignmentService.revokeOrganizationRole(
+                orgA.getId(), legacyAdmin.getId(), Role.ORGANIZATION_ADMIN, owner.getId(), "Demotion");
+
+        entityManager.flush();
+        entityManager.clear();
+
+        // 4. The resolver is called again: must NOT fall back to legacy ADMIN!
+        Set<Role> rolesAfterRevocation = databaseRoleResolver.resolveRoles(
+                legacyAdmin.getId(), OrganizationAuthorizationContext.of(orgA.getId()));
+
+        assertThat(rolesAfterRevocation)
+                .as("Revocation must not silently restore revoked privilege via legacy membership role fallback")
+                .isEmpty();
+    }
+
+    @Test
+    @DisplayName("Stage 4.1 §3: Expired assignment followed by reassignment supersedes old record and succeeds")
+    void shouldReassignRoleWhenPreviousAssignmentIsExpired() {
+        Instant pastExpiry = Instant.now().minus(1, ChronoUnit.HOURS);
+
+        // Create an expired assignment directly
+        RoleEntity memberRole = roleRepository.findByName("ORGANIZATION_MEMBER").orElseThrow();
+        Organization managedOrgA = organizationRepository.findById(orgA.getId()).orElseThrow();
+        User managedDevUser = userRepository.findById(devUser.getId()).orElseThrow();
+        User managedOwner = userRepository.findById(owner.getId()).orElseThrow();
+
+        OrganizationRoleAssignment expiredAssignment = orgAssignmentRepository.saveAndFlush(
+                OrganizationRoleAssignment.builder()
+                        .organization(managedOrgA)
+                        .user(managedDevUser)
+                        .role(memberRole)
+                        .roleScope(RoleScope.ORGANIZATION)
+                        .assignedBy(managedOwner)
+                        .assignedAt(Instant.now().minus(2, ChronoUnit.HOURS))
+                        .expiresAt(pastExpiry)
+                        .build()
+        );
+
+        assertThat(expiredAssignment.isExpired(Instant.now())).isTrue();
+        assertThat(expiredAssignment.isRevoked()).isFalse();
+
+        // Reassign the same role: should supersede the expired record and create an active assignment
+        OrganizationRoleAssignment reassigned = roleAssignmentService.assignOrganizationRole(
+                orgA.getId(), devUser.getId(), Role.ORGANIZATION_MEMBER, owner.getId(), null);
+
+        assertThat(reassigned.isActive()).isTrue();
+
+        // Verify the old assignment was marked EXPIRED_SUPERSEDED to release the partial unique index slot
+        OrganizationRoleAssignment oldArchived = orgAssignmentRepository.findById(expiredAssignment.getId()).orElseThrow();
+        assertThat(oldArchived.isRevoked()).isTrue();
+        assertThat(oldArchived.getRevocationReason()).isEqualTo("EXPIRED_SUPERSEDED");
+    }
+
+    @Test
+    @DisplayName("Stage 4.1 §3: Expired project assignment followed by reassignment supersedes old record")
+    void shouldReassignProjectRoleWhenPreviousAssignmentIsExpired() {
+        Instant pastExpiry = Instant.now().minus(30, ChronoUnit.MINUTES);
+
+        RoleEntity projectMemberRole = roleRepository.findByName("PROJECT_MEMBER").orElseThrow();
+        Organization managedOrgA = organizationRepository.findById(orgA.getId()).orElseThrow();
+        User managedDevUser = userRepository.findById(devUser.getId()).orElseThrow();
+        User managedOwner = userRepository.findById(owner.getId()).orElseThrow();
+
+        ProjectRoleAssignment expiredAssignment = projectAssignmentRepository.saveAndFlush(
+                ProjectRoleAssignment.builder()
+                        .projectId(projectA1)
+                        .organization(managedOrgA)
+                        .user(managedDevUser)
+                        .role(projectMemberRole)
+                        .roleScope(RoleScope.PROJECT)
+                        .assignedBy(managedOwner)
+                        .assignedAt(Instant.now().minus(2, ChronoUnit.HOURS))
+                        .expiresAt(pastExpiry)
+                        .build()
+        );
+
+        // Reassign the same role in the project
+        ProjectRoleAssignment reassigned = roleAssignmentService.assignProjectRole(
+                orgA.getId(), projectA1, devUser.getId(), Role.PROJECT_MEMBER, adminUser.getId(), null);
+
+        assertThat(reassigned.isActive()).isTrue();
+
+        ProjectRoleAssignment oldArchived = projectAssignmentRepository.findById(expiredAssignment.getId()).orElseThrow();
+        assertThat(oldArchived.isRevoked()).isTrue();
+        assertThat(oldArchived.getRevocationReason()).isEqualTo("EXPIRED_SUPERSEDED");
+    }
+
+    @Test
+    @DisplayName("Stage 4.1 §3: Maintenance operation archives stale expired assignments")
+    void shouldArchiveStaleExpiredAssignments() {
+        Instant pastExpiry = Instant.now().minus(10, ChronoUnit.MINUTES);
+
+        RoleEntity billingRole = roleRepository.findByName("ORGANIZATION_BILLING").orElseThrow();
+        Organization managedOrgA = organizationRepository.findById(orgA.getId()).orElseThrow();
+        User managedDevUser = userRepository.findById(devUser.getId()).orElseThrow();
+        User managedOwner = userRepository.findById(owner.getId()).orElseThrow();
+
+        OrganizationRoleAssignment expired = orgAssignmentRepository.saveAndFlush(
+                OrganizationRoleAssignment.builder()
+                        .organization(managedOrgA)
+                        .user(managedDevUser)
+                        .role(billingRole)
+                        .roleScope(RoleScope.ORGANIZATION)
+                        .assignedBy(managedOwner)
+                        .assignedAt(Instant.now().minus(1, ChronoUnit.HOURS))
+                        .expiresAt(pastExpiry)
+                        .build()
+        );
+
+        int archivedCount = roleAssignmentService.expireStaleAssignments(Instant.now());
+        assertThat(archivedCount).isGreaterThanOrEqualTo(1);
+
+        OrganizationRoleAssignment updated = orgAssignmentRepository.findById(expired.getId()).orElseThrow();
+        assertThat(updated.isRevoked()).isTrue();
+        assertThat(updated.getRevocationReason()).isEqualTo("EXPIRED");
+    }
+
+    @Test
+    @DisplayName("Stage 4.1 §4: Organization Admin cannot grant ORGANIZATION_BILLING")
+    void shouldDenyAdminFromGrantingBillingRole() {
+        assertThatThrownBy(() -> {
+            roleAssignmentService.assignOrganizationRole(
+                    orgA.getId(), devUser.getId(), Role.ORGANIZATION_BILLING, adminUser.getId(), null);
+        }).isInstanceOf(RoleAssignmentAccessDeniedException.class)
+          .hasMessageContaining("Only ORGANIZATION_OWNER can grant ORGANIZATION_BILLING");
+    }
+
+    @Test
+    @DisplayName("Stage 4.1 §4: Organization Admin cannot revoke ORGANIZATION_BILLING")
+    void shouldDenyAdminFromRevokingBillingRole() {
+        // Owner grants billing
+        roleAssignmentService.assignOrganizationRole(
+                orgA.getId(), devUser.getId(), Role.ORGANIZATION_BILLING, owner.getId(), null);
+
+        // Admin attempts to revoke billing
+        assertThatThrownBy(() -> {
+            roleAssignmentService.revokeOrganizationRole(
+                    orgA.getId(), devUser.getId(), Role.ORGANIZATION_BILLING, adminUser.getId(), "Admin revocation");
+        }).isInstanceOf(RoleAssignmentAccessDeniedException.class)
+          .hasMessageContaining("Only ORGANIZATION_OWNER can revoke ORGANIZATION_BILLING");
+    }
+
+    @Test
+    @DisplayName("Stage 4.1 §4: Organization Admin cannot grant ORGANIZATION_OWNER role")
+    void shouldDenyAdminFromGrantingOwnerRole() {
+        assertThatThrownBy(() -> {
+            roleAssignmentService.assignOrganizationRole(
+                    orgA.getId(), devUser.getId(), Role.ORGANIZATION_OWNER, adminUser.getId(), null);
+        }).isInstanceOf(RoleAssignmentAccessDeniedException.class)
+          .hasMessageContaining("Only ORGANIZATION_OWNER can grant ORGANIZATION_OWNER");
+    }
+
+    @Test
+    @DisplayName("Stage 4.1 §4: Organization Admin cannot revoke ORGANIZATION_OWNER role")
+    void shouldDenyAdminFromRevokingOwnerRole() {
+        // Add a second owner
+        User owner2 = userRepository.save(User.builder()
+                .email("owner2-" + UUID.randomUUID() + "@devflow.com")
+                .username("own2_" + UUID.randomUUID().toString().substring(0, 8))
+                .passwordHash("hashed")
+                .accountStatus(AccountStatus.ACTIVE)
+                .emailVerified(true)
+                .build());
+
+        organizationMemberRepository.save(OrganizationMember.builder()
+                .organization(orgA)
+                .user(owner2)
+                .role(OrganizationRole.OWNER)
+                .status(OrganizationMembershipStatus.ACTIVE)
+                .build());
+
+        roleAssignmentService.assignOrganizationRole(
+                orgA.getId(), owner2.getId(), Role.ORGANIZATION_OWNER, owner.getId(), null);
+
+        // Admin attempts to revoke owner2
+        assertThatThrownBy(() -> {
+            roleAssignmentService.revokeOrganizationRole(
+                    orgA.getId(), owner2.getId(), Role.ORGANIZATION_OWNER, adminUser.getId(), "Takeover attempt");
+        }).isInstanceOf(RoleAssignmentAccessDeniedException.class)
+          .hasMessageContaining("Only ORGANIZATION_OWNER can revoke ORGANIZATION_OWNER");
+    }
+
+    @Test
+    @DisplayName("Stage 4.1 §4: Cannot revoke sole active ORGANIZATION_OWNER")
+    void shouldPreventRevokingSoleActiveOwner() {
+        // Explicitly assign owner role to owner
+        roleAssignmentService.assignOrganizationRole(
+                orgA.getId(), owner.getId(), Role.ORGANIZATION_OWNER, owner.getId(), null);
+
+        assertThatThrownBy(() -> {
+            roleAssignmentService.revokeOrganizationRole(
+                    orgA.getId(), owner.getId(), Role.ORGANIZATION_OWNER, owner.getId(), "Self revoke");
+        }).isInstanceOf(RoleAssignmentAccessDeniedException.class)
+          .hasMessageContaining("Cannot revoke sole active ORGANIZATION_OWNER");
+    }
+
+    @Test
+    @DisplayName("Stage 4.1 §4: Non-lead member cannot assign project roles")
+    void shouldDenyRegularMemberFromAssigningProjectRoles() {
+        assertThatThrownBy(() -> {
+            roleAssignmentService.assignProjectRole(
+                    orgA.getId(), projectA1, adminUser.getId(), Role.PROJECT_MEMBER, devUser.getId(), null);
+        }).isInstanceOf(RoleAssignmentAccessDeniedException.class)
+          .hasMessageContaining("Requires ORGANIZATION_OWNER, ORGANIZATION_ADMIN, or PROJECT_LEAD");
+    }
+
+    @Test
+    @DisplayName("Stage 4.1 §4: Project Lead can assign roles in their project but not another project")
+    void shouldAllowProjectLeadToAssignInOwnProjectOnly() {
+        User projectLeadUser = userRepository.save(User.builder()
+                .email("lead-" + UUID.randomUUID() + "@devflow.com")
+                .username("lead_" + UUID.randomUUID().toString().substring(0, 8))
+                .passwordHash("hashed")
+                .accountStatus(AccountStatus.ACTIVE)
+                .emailVerified(true)
+                .build());
+
+        organizationMemberRepository.save(OrganizationMember.builder()
+                .organization(orgA)
+                .user(projectLeadUser)
+                .role(OrganizationRole.DEVELOPER)
+                .status(OrganizationMembershipStatus.ACTIVE)
+                .build());
+
+        // Assign PROJECT_LEAD in projectA1
+        roleAssignmentService.assignProjectRole(
+                orgA.getId(), projectA1, projectLeadUser.getId(), Role.PROJECT_LEAD, adminUser.getId(), null);
+
+        // Project lead assigns PROJECT_MEMBER in projectA1 -> SUCCESS
+        ProjectRoleAssignment success = roleAssignmentService.assignProjectRole(
+                orgA.getId(), projectA1, devUser.getId(), Role.PROJECT_MEMBER, projectLeadUser.getId(), null);
+        assertThat(success.isActive()).isTrue();
+
+        // Project lead attempts to assign PROJECT_MEMBER in projectA2 (where they have no role) -> ACCESS DENIED
+        assertThatThrownBy(() -> {
+            roleAssignmentService.assignProjectRole(
+                    orgA.getId(), projectA2, devUser.getId(), Role.PROJECT_MEMBER, projectLeadUser.getId(), null);
+        }).isInstanceOf(RoleAssignmentAccessDeniedException.class)
+          .hasMessageContaining("Requires ORGANIZATION_OWNER, ORGANIZATION_ADMIN, or PROJECT_LEAD");
+    }
+
+    @Test
+    @DisplayName("Stage 4.1 §2: Reject project assignment when TenantBoundaryValidator fails")
+    void shouldRejectProjectAssignmentWhenTenantBoundaryValidatorRejectsProject() {
+        UUID foreignProjectId = UUID.randomUUID();
+
+        // Configure mock or lambda tenantBoundaryValidator that rejects foreignProjectId
+        TenantBoundaryValidator validator = (orgId, projId) -> !projId.equals(foreignProjectId);
+        roleAssignmentService.setTenantBoundaryValidator(validator);
+
+        try {
+            assertThatThrownBy(() -> {
+                roleAssignmentService.assignProjectRole(
+                        orgA.getId(), foreignProjectId, devUser.getId(), Role.PROJECT_MEMBER, adminUser.getId(), null);
+            }).isInstanceOf(InvalidRoleAssignmentException.class)
+              .hasMessageContaining("Tenant boundary violation");
+        } finally {
+            roleAssignmentService.setTenantBoundaryValidator(null);
+        }
     }
 }
