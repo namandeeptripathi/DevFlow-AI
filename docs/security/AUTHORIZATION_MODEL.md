@@ -5,6 +5,9 @@
 > **Author:** Principal Security Architect
 > **Date:** 2026-07-29
 > **Classification:** Internal — Engineering & Security
+>
+> **Policy Amendments & Operational Resolutions:**
+> See [ADR-001: Centralized Authorization Policy Resolution & Hardening](ADR-001-AUTHORIZATION-POLICY-RESOLUTION.md) (*Status: Product-owner approved; ARB ratification pending*). ADR-001 resolves the complete 48-permission matrix, organization billing isolation, platform security gates, hierarchical scope inheritance, and ownership alternative rules while keeping this baseline document's historical ARB approval intact.
 
 ---
 
@@ -289,6 +292,9 @@ Organization roles are the primary access control dimension in DevFlow. They are
 | `ORGANIZATION_VIEWER` | Organization-wide | Read-only access to all non-sensitive organization data (project boards, analytics dashboards, documents). Cannot create, modify, or delete any resource. |
 | `ORGANIZATION_BILLING` | Billing scope only | Access exclusively to billing management, invoice history, and subscription settings. No access to any engineering data. |
 
+> [!NOTE]
+> **Operational Resolution (ADR-001 §2.1):** `ORGANIZATION_BILLING` is strictly granted `billing.view` and `billing.manage` with zero engineering permissions. It does not inherit engineering permissions and is isolated from the engineering role hierarchy. Only `ORGANIZATION_OWNER` can assign or revoke this role.
+
 ### 5.3 Project Roles
 
 Project roles narrow permissions within the scope of a single project. A user must already hold an organization-level role before they can be assigned a project role.
@@ -334,6 +340,9 @@ PLATFORM_ADMIN
 - A higher-level role always has all the permissions of all roles beneath it in the hierarchy.
 - Role hierarchy operates **within scope boundaries**. `ORGANIZATION_OWNER` does not inherit `PLATFORM_ADMIN` capabilities.
 - A user may hold **multiple roles simultaneously** (e.g., `ORGANIZATION_MEMBER` + `PROJECT_LEAD` on specific projects). The union of granted permissions applies.
+
+> [!NOTE]
+> **Operational Resolution (ADR-001 §2.4):** Role hierarchy operates strictly within scope boundaries. Organization Owners and Admins inherit project administration permissions for projects within their tenant without cross-scope role pollution. Organization Viewers inherit project read-only access. Organization Members require explicit project assignment via `ProjectAssignmentValidator`. Project roles apply exclusively to their assigned project and cannot grant organization or platform permissions.
 
 ### 5.6 Role Lifecycle
 
@@ -464,6 +473,9 @@ The following table defines the canonical mapping between roles and their includ
 
 *`project.delete` for `PROJECT_LEAD` applies only to projects they own.
 
+> [!NOTE]
+> **Complete 48-Permission Matrix (ADR-001 §3):** The complete canonical role-to-permission mapping covering all 48 permissions (including 8 platform permissions and ownership alternatives) is authoritatively defined in [ADR-001](ADR-001-AUTHORIZATION-POLICY-RESOLUTION.md). All 48 permissions are mapped across all 10 canonical roles.
+
 ### 6.6 Future Extensibility
 
 The permission model is designed as a **registry-driven system**. New permissions are added to the permission registry without modifying role definitions. New roles are assembled from existing permission sets without altering the permission semantics. This separation of concerns allows the permission vocabulary to grow independently of the role hierarchy, and provides the foundation for ABAC (Attribute-Based Access Control) extensions described in Section 15.
@@ -487,6 +499,9 @@ Ownership is a first-class authorization concept in DevFlow. It represents the r
 | **CommentThread** | The user who opened the thread | Thread resolution and thread deletion |
 | **Comment** | The comment author | Comment editing and soft deletion of own comments |
 | **Personal Resources** | The user themselves | Profile settings, personal notification preferences, personal API keys (future) |
+
+> [!NOTE]
+> **Ownership Alternatives & Verification (ADR-001 §2.5):** The central authorization engine enforces ownership alternatives (task deletion by creator, repo disconnection by connection owner, kb deletion by author, automation deletion by rule owner, comment modification by author) via the framework-independent `ResourceOwnershipValidator` SPI. Ownership can fulfill permissions only when the user's role grants base access to that resource domain, and ownership never bypasses tenant isolation.
 
 ### 7.2 Ownership vs. Role-Based Access
 
@@ -802,6 +817,11 @@ In security incidents where normal access channels are unavailable or compromise
 - It requires out-of-band approval from a designated security officer.
 - All actions taken under emergency access are logged to an immutable, isolated audit trail that cannot be modified even by platform administrators.
 - Affected tenant organizations are notified of any emergency access events.
+
+> [!NOTE]
+> **Platform Security Gates & SPI Ports (ADR-001 §2.2, §2.3):** Operational authorization enforces independent validation gates for platform actions:
+> 1. `PlatformSupportValidator`: Platform support staff (`PLATFORM_SUPPORT`, `PLATFORM_ADMIN`) accessing `platform.support.case.read` or `platform.support.tenant.read` must be verified against an open support case for the specific tenant organization.
+> 2. `EmergencyAccessValidator`: Executing `platform.emergency_access.execute` requires independent out-of-band approval within a strict maximum 4-hour evaluation window, emitting mandatory `EMERGENCY_ACCESS_ALLOWED` or `EMERGENCY_ACCESS_DENIED` audit events.
 
 ---
 
