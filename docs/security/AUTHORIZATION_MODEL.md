@@ -8,6 +8,9 @@
 >
 > **Policy Amendments & Operational Resolutions:**
 > See [ADR-001: Centralized Authorization Policy Resolution & Hardening](ADR-001-AUTHORIZATION-POLICY-RESOLUTION.md) (*Status: Product-owner approved; ARB ratification pending*). ADR-001 resolves the complete 48-permission matrix, organization billing isolation, platform security gates, hierarchical scope inheritance, and ownership alternative rules while keeping this baseline document's historical ARB approval intact.
+>
+> **Persistence & Role Assignment Model (Stage 4):**
+> See [Stage 4 Persistence Architecture](STAGE-4-PERSISTENCE-ARCHITECTURE.md) for the database-backed canonical catalog, tenant constraints, and scoped role assignment lifecycle.
 
 ---
 

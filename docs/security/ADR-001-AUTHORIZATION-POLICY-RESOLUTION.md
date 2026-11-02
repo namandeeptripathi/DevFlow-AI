@@ -220,3 +220,4 @@ All SPI ports are pure Java interfaces without framework dependencies:
 2. **Backward Compatibility:** All existing contracts (`AuthorizationRequest`, `AuthorizationDecision`, `AuthorizationContext`, `Role`, `Permission`, `RoleScope`) remain fully backward compatible.
 3. **Application Preservation:** The existing application role `OrganizationRole.DEVELOPER` in `backend/app` maps to `Role.ORGANIZATION_MEMBER` without database schema or enum modifications.
 4. **ARB Review:** This document is marked *Product-owner approved; ARB ratification pending* to preserve the integrity of the historical ARB approval of `AUTHORIZATION_MODEL.md` v1.0.0.
+5. **Persistence & Scoped Assignments (Stage 4):** Persisted in PostgreSQL via `roles`, `permissions`, `role_permissions`, `organization_role_assignments`, and `project_role_assignments` tables (migration `V13__create_authorization_tables.sql`). See [Stage 4 Persistence Architecture](STAGE-4-PERSISTENCE-ARCHITECTURE.md).
