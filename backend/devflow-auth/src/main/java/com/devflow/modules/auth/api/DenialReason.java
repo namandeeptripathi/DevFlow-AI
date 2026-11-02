@@ -34,6 +34,31 @@ public enum DenialReason {
     RESOURCE_STATE_CONFLICT("Resource state prohibits the requested operation"),
 
     /**
+     * Requested permission is not registered in the canonical permission registry.
+     */
+    UNKNOWN_PERMISSION("Permission is not recognized or registered in canonical permission registry"),
+
+    /**
+     * Authorization scope mismatch between request and role or context (e.g. cross-scope escalation).
+     */
+    SCOPE_MISMATCH("Authorization scope mismatch between request and role or context"),
+
+    /**
+     * Platform support access is not linked to an active, verified support case for this tenant.
+     */
+    SUPPORT_CASE_UNAUTHORIZED("Platform support access is not linked to an active, verified support case for this tenant"),
+
+    /**
+     * Emergency access requires verified out-of-band approval within a 4-hour authorization window.
+     */
+    EMERGENCY_ACCESS_NOT_APPROVED("Emergency access requires verified out-of-band approval within a 4-hour window"),
+
+    /**
+     * Organization member requires an active project assignment or project role for project-scoped access.
+     */
+    PROJECT_ASSIGNMENT_REQUIRED("Organization member requires an active project assignment for project-scoped access"),
+
+    /**
      * General or unspecified authorization rejection.
      */
     GENERAL_DENIED("Access denied");
