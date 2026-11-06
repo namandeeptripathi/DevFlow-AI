@@ -249,6 +249,15 @@ public class GlobalExceptionHandler {
         return buildErrorResponse(HttpStatus.FORBIDDEN, "Forbidden", ex.getMessage(), request.getRequestURI());
     }
 
+    @ExceptionHandler(org.springframework.security.access.AccessDeniedException.class)
+    public ResponseEntity<Map<String, Object>> handleSpringSecurityAccessDenied(
+            org.springframework.security.access.AccessDeniedException ex,
+            HttpServletRequest request
+    ) {
+        log.warn("Spring Security access denied on [{}]: {}", request.getRequestURI(), ex.getMessage());
+        return buildErrorResponse(HttpStatus.FORBIDDEN, "Forbidden", "Access is denied: " + ex.getMessage(), request.getRequestURI());
+    }
+
     @ExceptionHandler(OrganizationMembershipRequiredException.class)
     public ResponseEntity<Map<String, Object>> handleOrganizationMembershipRequired(
             OrganizationMembershipRequiredException ex,

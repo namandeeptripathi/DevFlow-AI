@@ -2,8 +2,11 @@ package com.devflow.security;
 
 import com.devflow.common.ApiPaths;
 import com.devflow.config.SecurityProperties;
+import com.devflow.security.jwt.JwtAccessDeniedHandler;
 import com.devflow.security.jwt.JwtAuthenticationEntryPoint;
 import com.devflow.security.jwt.JwtAuthenticationFilter;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.http.HttpStatus;
@@ -71,15 +74,20 @@ public class SecurityConfiguration {
     private final SecurityProperties securityProperties;
     private final JwtAuthenticationFilter jwtAuthenticationFilter;
     private final JwtAuthenticationEntryPoint jwtAuthenticationEntryPoint;
+    private final JwtAccessDeniedHandler jwtAccessDeniedHandler;
 
     public SecurityConfiguration(
             SecurityProperties securityProperties,
             JwtAuthenticationFilter jwtAuthenticationFilter,
-            JwtAuthenticationEntryPoint jwtAuthenticationEntryPoint
+            JwtAuthenticationEntryPoint jwtAuthenticationEntryPoint,
+            @Autowired(required = false) JwtAccessDeniedHandler jwtAccessDeniedHandler
     ) {
         this.securityProperties = securityProperties;
         this.jwtAuthenticationFilter = jwtAuthenticationFilter;
         this.jwtAuthenticationEntryPoint = jwtAuthenticationEntryPoint;
+        this.jwtAccessDeniedHandler = jwtAccessDeniedHandler != null
+                ? jwtAccessDeniedHandler
+                : new JwtAccessDeniedHandler(new ObjectMapper());
     }
 
     /**
@@ -125,8 +133,10 @@ public class SecurityConfiguration {
                 )
                 // ── Exception handling ─────────────────────────────────────────
                 // Return 401 Unauthorized JSON response via JwtAuthenticationEntryPoint
+                // Return 403 Forbidden JSON response via JwtAccessDeniedHandler
                 .exceptionHandling(exceptions -> exceptions
                         .authenticationEntryPoint(jwtAuthenticationEntryPoint)
+                        .accessDeniedHandler(jwtAccessDeniedHandler)
                 )
                 // ── JWT Filter ────────────────────────────────────────────────
                 // Inspects Bearer token before UsernamePasswordAuthenticationFilter
