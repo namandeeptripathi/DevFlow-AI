@@ -49,3 +49,4 @@ public class AuthorizationCacheProperties {
         this.keyPrefix = keyPrefix;
     }
 }
+

@@ -19,3 +19,4 @@ public class RevokeRoleRequest {
     @Schema(description = "Business justification or audit reason for revocation", example = "Project reassignment")
     private String reason;
 }
+

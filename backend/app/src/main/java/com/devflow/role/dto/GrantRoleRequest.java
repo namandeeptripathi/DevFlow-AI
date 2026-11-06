@@ -32,3 +32,4 @@ public class GrantRoleRequest {
     @Schema(description = "Optional expiration timestamp. If null, assignment does not expire.", example = "2026-12-31T23:59:59Z")
     private Instant expiresAt;
 }
+
