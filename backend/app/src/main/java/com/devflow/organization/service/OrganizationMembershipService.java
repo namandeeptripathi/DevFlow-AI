@@ -10,6 +10,7 @@ import com.devflow.organization.exception.OrganizationMemberNotFoundException;
 import com.devflow.organization.exception.OrganizationNotFoundException;
 import com.devflow.organization.repository.OrganizationMemberRepository;
 import com.devflow.organization.repository.OrganizationRepository;
+import com.devflow.security.authorization.cache.AuthorizationCacheService;
 import com.devflow.team.domain.TeamRole;
 import com.devflow.team.domain.TeamStatus;
 import com.devflow.team.exception.InvalidTeamOperationException;
@@ -62,6 +63,7 @@ public class OrganizationMembershipService {
     private final UserRepository userRepository;
     private final OrganizationAuthorizationService authorizationService;
     private final TeamMemberRepository teamMemberRepository;
+    private AuthorizationCacheService cacheService;
 
     @Autowired
     public OrganizationMembershipService(
@@ -69,7 +71,8 @@ public class OrganizationMembershipService {
             OrganizationRepository organizationRepository,
             UserRepository userRepository,
             OrganizationAuthorizationService authorizationService,
-            TeamMemberRepository teamMemberRepository
+            TeamMemberRepository teamMemberRepository,
+            @Autowired(required = false) AuthorizationCacheService cacheService
     ) {
         this.organizationMemberRepository = Objects.requireNonNull(
                 organizationMemberRepository, "organizationMemberRepository must not be null");
@@ -81,6 +84,22 @@ public class OrganizationMembershipService {
                 authorizationService, "authorizationService must not be null");
         this.teamMemberRepository = Objects.requireNonNull(
                 teamMemberRepository, "teamMemberRepository must not be null");
+        this.cacheService = cacheService;
+    }
+
+    public OrganizationMembershipService(
+            OrganizationMemberRepository organizationMemberRepository,
+            OrganizationRepository organizationRepository,
+            UserRepository userRepository,
+            OrganizationAuthorizationService authorizationService,
+            TeamMemberRepository teamMemberRepository
+    ) {
+        this(organizationMemberRepository, organizationRepository, userRepository,
+                authorizationService, teamMemberRepository, null);
+    }
+
+    public void setCacheService(AuthorizationCacheService cacheService) {
+        this.cacheService = cacheService;
     }
 
     // ── Commands ──────────────────────────────────────────────────────────────
@@ -135,6 +154,9 @@ public class OrganizationMembershipService {
                 .build();
 
         OrganizationMember saved = organizationMemberRepository.save(member);
+        if (cacheService != null) {
+            cacheService.evictUser(organizationId, targetUserId);
+        }
         log.info("Added user [{}] to organization [{}] with role [{}] by caller [{}]", targetUserId, organizationId, role, callerUserId);
         return saved;
     }
@@ -192,6 +214,9 @@ public class OrganizationMembershipService {
         teamMemberRepository.deleteByUserIdAndOrganizationId(targetUserId, organizationId);
 
         organizationMemberRepository.delete(member);
+        if (cacheService != null) {
+            cacheService.evictUser(organizationId, targetUserId);
+        }
         log.info("Removed user [{}] from organization [{}] by caller [{}]", targetUserId, organizationId, callerUserId);
     }
 
@@ -241,6 +266,9 @@ public class OrganizationMembershipService {
 
         member.setRole(newRole);
         OrganizationMember updated = organizationMemberRepository.save(member);
+        if (cacheService != null) {
+            cacheService.evictUser(organizationId, targetUserId);
+        }
         log.info("Changed role for user [{}] in organization [{}] to [{}] by caller [{}]", targetUserId, organizationId, newRole, callerUserId);
         return updated;
     }
