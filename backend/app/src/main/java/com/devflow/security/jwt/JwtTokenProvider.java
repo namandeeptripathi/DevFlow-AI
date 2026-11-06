@@ -55,13 +55,24 @@ public class JwtTokenProvider {
     }
 
     /**
-     * Generates a short-lived access JWT token for the specified user.
+     * Generates a short-lived access JWT token for the specified user without tenant context.
      *
      * @param userDetails the authenticated principal
      * @return signed access token string
      */
     public String generateAccessToken(UserDetails userDetails) {
-        return buildToken(userDetails, jwtProperties.getAccessTokenExpiration());
+        return generateAccessToken(userDetails, null);
+    }
+
+    /**
+     * Generates a short-lived access JWT token for the specified user with an optional active organization context hint.
+     *
+     * @param userDetails the authenticated principal
+     * @param organizationId optional active organization UUID context hint
+     * @return signed access token string
+     */
+    public String generateAccessToken(UserDetails userDetails, java.util.UUID organizationId) {
+        return buildToken(userDetails, organizationId, jwtProperties.getAccessTokenExpiration());
     }
 
     /**
@@ -71,10 +82,10 @@ public class JwtTokenProvider {
      * @return signed refresh token string
      */
     public String generateRefreshToken(UserDetails userDetails) {
-        return buildToken(userDetails, jwtProperties.getRefreshTokenExpiration());
+        return buildToken(userDetails, null, jwtProperties.getRefreshTokenExpiration());
     }
 
-    private String buildToken(UserDetails userDetails, long expirationMs) {
+    private String buildToken(UserDetails userDetails, java.util.UUID organizationId, long expirationMs) {
         Objects.requireNonNull(userDetails, "userDetails must not be null");
 
         Date now = new Date();
@@ -85,7 +96,7 @@ public class JwtTokenProvider {
                 .issuer(jwtProperties.getIssuer())
                 .issuedAt(now)
                 .expiration(expiryDate)
-                .claims(jwtClaimsFactory.createClaims(userDetails))
+                .claims(jwtClaimsFactory.createClaims(userDetails, organizationId))
                 .signWith(secretKey, Jwts.SIG.HS512)
                 .compact();
     }
@@ -141,6 +152,46 @@ public class JwtTokenProvider {
      */
     public Date extractExpiration(String token) {
         return extractClaim(token, Claims::getExpiration);
+    }
+
+    /**
+     * Extracts the optional user UUID claim from the specified token.
+     *
+     * @param token the JWT token string
+     * @return optional containing the parsed user UUID, or empty if absent or malformed
+     */
+    public java.util.Optional<java.util.UUID> extractUserId(String token) {
+        return extractClaim(token, claims -> {
+            Object val = claims.get(JwtClaimsFactory.CLAIM_USER_ID);
+            if (val instanceof String s && !s.isBlank()) {
+                try {
+                    return java.util.Optional.of(java.util.UUID.fromString(s));
+                } catch (IllegalArgumentException e) {
+                    return java.util.Optional.empty();
+                }
+            }
+            return java.util.Optional.empty();
+        });
+    }
+
+    /**
+     * Extracts the optional active organization UUID context hint from the specified token.
+     *
+     * @param token the JWT token string
+     * @return optional containing the parsed organization UUID, or empty if absent or malformed
+     */
+    public java.util.Optional<java.util.UUID> extractOrganizationId(String token) {
+        return extractClaim(token, claims -> {
+            Object val = claims.get(JwtClaimsFactory.CLAIM_ORG_ID);
+            if (val instanceof String s && !s.isBlank()) {
+                try {
+                    return java.util.Optional.of(java.util.UUID.fromString(s));
+                } catch (IllegalArgumentException e) {
+                    return java.util.Optional.empty();
+                }
+            }
+            return java.util.Optional.empty();
+        });
     }
 
     /**
