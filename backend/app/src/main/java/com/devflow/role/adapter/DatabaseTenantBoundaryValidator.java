@@ -67,8 +67,8 @@ public class DatabaseTenantBoundaryValidator implements TenantBoundaryValidator 
 
         List<ProjectRoleAssignment> assignments = projectRoleAssignmentRepository.findByProjectId(projectId);
         if (assignments.isEmpty()) {
-            // Fails closed when project infrastructure has no recorded association
-            return false;
+            // Not recorded in any other organization; eligible for initial assignment in organizationId
+            return true;
         }
 
         return assignments.stream()

@@ -35,6 +35,37 @@ public interface ProjectRoleAssignmentRepository extends JpaRepository<ProjectRo
     List<ProjectRoleAssignment> findByProjectId(UUID projectId);
 
     /**
+     * Finds all assignments within an organization and project.
+     *
+     * @param organizationId organization UUID
+     * @param projectId project UUID
+     * @return list of assignments
+     */
+    List<ProjectRoleAssignment> findByOrganizationIdAndProjectId(UUID organizationId, UUID projectId);
+
+    /**
+     * Finds all active assignments within an organization and project.
+     *
+     * @param organizationId organization UUID
+     * @param projectId project UUID
+     * @param now reference instant for expiration
+     * @return list of active assignments
+     */
+    @Query("""
+        SELECT a FROM ProjectRoleAssignment a
+        JOIN FETCH a.role
+        WHERE a.organization.id = :organizationId
+          AND a.projectId = :projectId
+          AND a.revokedAt IS NULL
+          AND (a.expiresAt IS NULL OR a.expiresAt > :now)
+    """)
+    List<ProjectRoleAssignment> findActiveByOrganizationIdAndProjectId(
+        @Param("organizationId") UUID organizationId,
+        @Param("projectId") UUID projectId,
+        @Param("now") Instant now
+    );
+
+    /**
      * Finds all active (non-revoked, unexpired) project role assignments for a user in a project.
      *
      * @param projectId project UUID

@@ -17,6 +17,11 @@ import com.devflow.organization.exception.OrganizationMemberAlreadyExistsExcepti
 import com.devflow.organization.exception.OrganizationMemberNotFoundException;
 import com.devflow.organization.exception.OrganizationMembershipRequiredException;
 import com.devflow.organization.exception.OrganizationNotFoundException;
+import com.devflow.role.exception.InvalidRoleAssignmentException;
+import com.devflow.role.exception.RoleAssignmentAccessDeniedException;
+import com.devflow.role.exception.RoleAssignmentAlreadyExistsException;
+import com.devflow.role.exception.RoleAssignmentException;
+import com.devflow.role.exception.RoleAssignmentNotFoundException;
 import com.devflow.team.exception.InvalidTeamOperationException;
 import com.devflow.team.exception.TeamAccessDeniedException;
 import com.devflow.team.exception.TeamAlreadyExistsException;
@@ -265,6 +270,51 @@ public class GlobalExceptionHandler {
     ) {
         log.warn("Organization membership required: {}", ex.getMessage());
         return buildErrorResponse(HttpStatus.FORBIDDEN, "Forbidden", ex.getMessage(), request.getRequestURI());
+    }
+
+    @ExceptionHandler(RoleAssignmentAccessDeniedException.class)
+    public ResponseEntity<Map<String, Object>> handleRoleAssignmentAccessDenied(
+            RoleAssignmentAccessDeniedException ex,
+            HttpServletRequest request
+    ) {
+        log.warn("Role assignment access denied on [{}]: {}", request.getRequestURI(), ex.getMessage());
+        return buildErrorResponse(HttpStatus.FORBIDDEN, "Forbidden", ex.getMessage(), request.getRequestURI());
+    }
+
+    @ExceptionHandler(RoleAssignmentNotFoundException.class)
+    public ResponseEntity<Map<String, Object>> handleRoleAssignmentNotFound(
+            RoleAssignmentNotFoundException ex,
+            HttpServletRequest request
+    ) {
+        log.warn("Role assignment not found on [{}]: {}", request.getRequestURI(), ex.getMessage());
+        return buildErrorResponse(HttpStatus.NOT_FOUND, "Not Found", ex.getMessage(), request.getRequestURI());
+    }
+
+    @ExceptionHandler(RoleAssignmentAlreadyExistsException.class)
+    public ResponseEntity<Map<String, Object>> handleRoleAssignmentAlreadyExists(
+            RoleAssignmentAlreadyExistsException ex,
+            HttpServletRequest request
+    ) {
+        log.warn("Role assignment conflict on [{}]: {}", request.getRequestURI(), ex.getMessage());
+        return buildErrorResponse(HttpStatus.CONFLICT, "Conflict", ex.getMessage(), request.getRequestURI());
+    }
+
+    @ExceptionHandler(InvalidRoleAssignmentException.class)
+    public ResponseEntity<Map<String, Object>> handleInvalidRoleAssignment(
+            InvalidRoleAssignmentException ex,
+            HttpServletRequest request
+    ) {
+        log.warn("Invalid role assignment on [{}]: {}", request.getRequestURI(), ex.getMessage());
+        return buildErrorResponse(HttpStatus.BAD_REQUEST, "Bad Request", ex.getMessage(), request.getRequestURI());
+    }
+
+    @ExceptionHandler(RoleAssignmentException.class)
+    public ResponseEntity<Map<String, Object>> handleRoleAssignmentException(
+            RoleAssignmentException ex,
+            HttpServletRequest request
+    ) {
+        log.warn("Role assignment error on [{}]: {}", request.getRequestURI(), ex.getMessage());
+        return buildErrorResponse(HttpStatus.BAD_REQUEST, "Bad Request", ex.getMessage(), request.getRequestURI());
     }
 
     @ExceptionHandler(OrganizationInvitationNotFoundException.class)

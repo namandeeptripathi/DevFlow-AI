@@ -17,6 +17,7 @@ import com.devflow.role.exception.RoleAssignmentAccessDeniedException;
 import com.devflow.role.exception.RoleAssignmentAlreadyExistsException;
 import com.devflow.role.exception.RoleAssignmentNotFoundException;
 import com.devflow.role.repository.OrganizationRoleAssignmentRepository;
+import com.devflow.security.authorization.cache.AuthorizationCacheService;
 import com.devflow.role.repository.ProjectRoleAssignmentRepository;
 import com.devflow.role.repository.RoleRepository;
 import com.devflow.user.domain.User;
@@ -63,6 +64,7 @@ public class RoleAssignmentService {
     private final OrganizationMemberRepository organizationMemberRepository;
     private final UserRepository userRepository;
     private TenantBoundaryValidator tenantBoundaryValidator;
+    private AuthorizationCacheService cacheService;
 
     @Autowired
     public RoleAssignmentService(
@@ -72,7 +74,8 @@ public class RoleAssignmentService {
             OrganizationRepository organizationRepository,
             OrganizationMemberRepository organizationMemberRepository,
             UserRepository userRepository,
-            @Autowired(required = false) TenantBoundaryValidator tenantBoundaryValidator
+            @Autowired(required = false) TenantBoundaryValidator tenantBoundaryValidator,
+            @Autowired(required = false) AuthorizationCacheService cacheService
     ) {
         this.orgAssignmentRepository = Objects.requireNonNull(orgAssignmentRepository, "orgAssignmentRepository must not be null");
         this.projectAssignmentRepository = Objects.requireNonNull(projectAssignmentRepository, "projectAssignmentRepository must not be null");
@@ -81,10 +84,28 @@ public class RoleAssignmentService {
         this.organizationMemberRepository = Objects.requireNonNull(organizationMemberRepository, "organizationMemberRepository must not be null");
         this.userRepository = Objects.requireNonNull(userRepository, "userRepository must not be null");
         this.tenantBoundaryValidator = tenantBoundaryValidator;
+        this.cacheService = cacheService;
+    }
+
+    public RoleAssignmentService(
+            OrganizationRoleAssignmentRepository orgAssignmentRepository,
+            ProjectRoleAssignmentRepository projectAssignmentRepository,
+            RoleRepository roleRepository,
+            OrganizationRepository organizationRepository,
+            OrganizationMemberRepository organizationMemberRepository,
+            UserRepository userRepository,
+            TenantBoundaryValidator tenantBoundaryValidator
+    ) {
+        this(orgAssignmentRepository, projectAssignmentRepository, roleRepository, organizationRepository,
+                organizationMemberRepository, userRepository, tenantBoundaryValidator, null);
     }
 
     public void setTenantBoundaryValidator(TenantBoundaryValidator tenantBoundaryValidator) {
         this.tenantBoundaryValidator = tenantBoundaryValidator;
+    }
+
+    public void setCacheService(AuthorizationCacheService cacheService) {
+        this.cacheService = cacheService;
     }
 
     // ── Organization Role Assignments ─────────────────────────────────────────
@@ -184,6 +205,9 @@ public class RoleAssignmentService {
                 .build();
 
         OrganizationRoleAssignment saved = orgAssignmentRepository.save(assignment);
+        if (cacheService != null) {
+            cacheService.evictUser(organizationId, targetUserId);
+        }
         log.info("Assigned role [{}] to user [{}] in organization [{}] by [{}]", role.name(), targetUserId, organizationId, assignedByUserId);
         return saved;
     }
@@ -254,6 +278,9 @@ public class RoleAssignmentService {
 
         assignment.revoke(revokedByUser, reason, now);
         OrganizationRoleAssignment updated = orgAssignmentRepository.save(assignment);
+        if (cacheService != null) {
+            cacheService.evictUser(organizationId, targetUserId);
+        }
         log.info("Revoked role [{}] from user [{}] in organization [{}] by [{}] (reason: {})", role.name(), targetUserId, organizationId, revokedByUserId, reason);
         return updated;
     }
@@ -294,6 +321,76 @@ public class RoleAssignmentService {
         }
 
         return Collections.unmodifiableSet(roles);
+    }
+
+    /**
+     * Lists organization-scoped role assignments.
+     *
+     * <p>Requires the caller to hold {@link Role#ORGANIZATION_OWNER} or {@link Role#ORGANIZATION_ADMIN}.
+     *
+     * @param organizationId tenant organization UUID
+     * @param callerUserId user making the request
+     * @param activeOnly whether to filter only active assignments
+     * @return list of assignments
+     */
+    @Transactional(readOnly = true)
+    public List<OrganizationRoleAssignment> listOrganizationRoleAssignments(
+            UUID organizationId,
+            UUID callerUserId,
+            boolean activeOnly
+    ) {
+        Objects.requireNonNull(organizationId, "organizationId must not be null");
+        Objects.requireNonNull(callerUserId, "callerUserId must not be null");
+
+        Set<Role> callerRoles = getActiveOrganizationRoles(organizationId, callerUserId);
+        if (!callerRoles.contains(Role.ORGANIZATION_OWNER) && !callerRoles.contains(Role.ORGANIZATION_ADMIN)) {
+            throw new RoleAssignmentAccessDeniedException(
+                    "User [" + callerUserId + "] is not authorized to list roles in organization [" + organizationId + "]. Requires ORGANIZATION_OWNER or ORGANIZATION_ADMIN.");
+        }
+
+        if (activeOnly) {
+            return orgAssignmentRepository.findActiveByOrganizationId(organizationId, Instant.now());
+        } else {
+            return orgAssignmentRepository.findByOrganizationId(organizationId);
+        }
+    }
+
+    /**
+     * Revokes an organization role assignment by its assignment UUID.
+     *
+     * @param organizationId tenant organization UUID
+     * @param assignmentId assignment UUID to revoke
+     * @param revokedByUserId user executing the revocation
+     * @param reason business reason
+     * @return updated assignment
+     */
+    @Transactional
+    public OrganizationRoleAssignment revokeOrganizationRoleAssignment(
+            UUID organizationId,
+            UUID assignmentId,
+            UUID revokedByUserId,
+            String reason
+    ) {
+        Objects.requireNonNull(organizationId, "organizationId must not be null");
+        Objects.requireNonNull(assignmentId, "assignmentId must not be null");
+        Objects.requireNonNull(revokedByUserId, "revokedByUserId must not be null");
+
+        OrganizationRoleAssignment assignment = orgAssignmentRepository.findById(assignmentId)
+                .orElseThrow(() -> new RoleAssignmentNotFoundException(
+                        "Role assignment not found with ID: " + assignmentId));
+
+        if (!assignment.getOrganization().getId().equals(organizationId)) {
+            throw new RoleAssignmentNotFoundException(
+                    "Role assignment [" + assignmentId + "] does not belong to organization [" + organizationId + "]");
+        }
+
+        return revokeOrganizationRole(
+                organizationId,
+                assignment.getUser().getId(),
+                assignment.getRole().toDomainRole(),
+                revokedByUserId,
+                reason != null && !reason.isBlank() ? reason : "ADMIN_REVOCATION"
+        );
     }
 
     // ── Project Role Assignments ──────────────────────────────────────────────
@@ -392,6 +489,9 @@ public class RoleAssignmentService {
                 .build();
 
         ProjectRoleAssignment saved = projectAssignmentRepository.save(assignment);
+        if (cacheService != null) {
+            cacheService.evictUserProject(organizationId, projectId, targetUserId);
+        }
         log.info("Assigned project role [{}] to user [{}] in project [{}] (org: [{}]) by [{}]",
                 role.name(), targetUserId, projectId, organizationId, assignedByUserId);
         return saved;
@@ -453,9 +553,97 @@ public class RoleAssignmentService {
 
         assignment.revoke(revokedByUser, reason, now);
         ProjectRoleAssignment updated = projectAssignmentRepository.save(assignment);
+        if (cacheService != null) {
+            cacheService.evictUserProject(organizationId, projectId, targetUserId);
+        }
         log.info("Revoked project role [{}] from user [{}] in project [{}] by [{}] (reason: {})",
                 role.name(), targetUserId, projectId, revokedByUserId, reason);
         return updated;
+    }
+
+    /**
+     * Lists project-scoped role assignments within an organization and project.
+     *
+     * @param organizationId tenant organization UUID
+     * @param projectId target project UUID
+     * @param callerUserId user making the request
+     * @param activeOnly whether to filter only active assignments
+     * @return list of assignments
+     */
+    @Transactional(readOnly = true)
+    public List<ProjectRoleAssignment> listProjectRoleAssignments(
+            UUID organizationId,
+            UUID projectId,
+            UUID callerUserId,
+            boolean activeOnly
+    ) {
+        Objects.requireNonNull(organizationId, "organizationId must not be null");
+        Objects.requireNonNull(projectId, "projectId must not be null");
+        Objects.requireNonNull(callerUserId, "callerUserId must not be null");
+
+        // Tenant boundary check if validator present
+        if (tenantBoundaryValidator != null && !tenantBoundaryValidator.isProjectInOrganization(organizationId, projectId)) {
+            throw new InvalidRoleAssignmentException(
+                    "Tenant boundary violation: Project [" + projectId + "] does not belong to organization [" + organizationId + "]");
+        }
+
+        // Verify caller authorization: org OWNER/ADMIN or project LEAD or active project member
+        Set<Role> callerOrgRoles = getActiveOrganizationRoles(organizationId, callerUserId);
+        boolean isOrgAdmin = callerOrgRoles.contains(Role.ORGANIZATION_OWNER) || callerOrgRoles.contains(Role.ORGANIZATION_ADMIN);
+        boolean isProjectMember = isOrgAdmin || !getActiveProjectRoles(organizationId, projectId, callerUserId).isEmpty();
+
+        if (!isProjectMember) {
+            throw new RoleAssignmentAccessDeniedException(
+                    "User [" + callerUserId + "] is not authorized to list project roles in project [" + projectId + "]");
+        }
+
+        if (activeOnly) {
+            return projectAssignmentRepository.findActiveByOrganizationIdAndProjectId(organizationId, projectId, Instant.now());
+        } else {
+            return projectAssignmentRepository.findByOrganizationIdAndProjectId(organizationId, projectId);
+        }
+    }
+
+    /**
+     * Revokes a project role assignment by its assignment UUID.
+     *
+     * @param organizationId tenant organization UUID
+     * @param projectId target project UUID
+     * @param assignmentId assignment UUID to revoke
+     * @param revokedByUserId user executing the revocation
+     * @param reason business reason
+     * @return updated assignment
+     */
+    @Transactional
+    public ProjectRoleAssignment revokeProjectRoleAssignment(
+            UUID organizationId,
+            UUID projectId,
+            UUID assignmentId,
+            UUID revokedByUserId,
+            String reason
+    ) {
+        Objects.requireNonNull(organizationId, "organizationId must not be null");
+        Objects.requireNonNull(projectId, "projectId must not be null");
+        Objects.requireNonNull(assignmentId, "assignmentId must not be null");
+        Objects.requireNonNull(revokedByUserId, "revokedByUserId must not be null");
+
+        ProjectRoleAssignment assignment = projectAssignmentRepository.findById(assignmentId)
+                .orElseThrow(() -> new RoleAssignmentNotFoundException(
+                        "Project role assignment not found with ID: " + assignmentId));
+
+        if (!assignment.getOrganization().getId().equals(organizationId) || !assignment.getProjectId().equals(projectId)) {
+            throw new RoleAssignmentNotFoundException(
+                    "Project role assignment [" + assignmentId + "] does not belong to organization [" + organizationId + "] and project [" + projectId + "]");
+        }
+
+        return revokeProjectRole(
+                organizationId,
+                projectId,
+                assignment.getUser().getId(),
+                assignment.getRole().toDomainRole(),
+                revokedByUserId,
+                reason != null && !reason.isBlank() ? reason : "ADMIN_REVOCATION"
+        );
     }
 
     /**
