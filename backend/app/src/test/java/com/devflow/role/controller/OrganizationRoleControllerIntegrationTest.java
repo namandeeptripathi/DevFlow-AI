@@ -58,6 +58,9 @@ class OrganizationRoleControllerIntegrationTest {
     private RoleAssignmentService roleAssignmentService;
 
     @Autowired
+    private com.devflow.role.service.CustomRoleService customRoleService;
+
+    @Autowired
     private OrganizationRepository organizationRepository;
 
     @Autowired
@@ -322,6 +325,104 @@ class OrganizationRoleControllerIntegrationTest {
                     .andExpect(status().isBadRequest())
                     .andExpect(jsonPath("$.status").value(400));
         }
+
+        @Test
+        @DisplayName("Admin can grant custom role to an active member by name")
+        void admin_grantsCustomRoleByName_success() throws Exception {
+            com.devflow.role.dto.CreateCustomRoleRequest customRoleReq = com.devflow.role.dto.CreateCustomRoleRequest.builder()
+                    .name("RELEASE_ENGINEER")
+                    .displayName("Release Engineer")
+                    .permissions(Set.of("project.read", "cycle.manage"))
+                    .build();
+            customRoleService.createCustomRole(orgA.getId(), adminA.getId(), customRoleReq);
+
+            GrantRoleRequest request = GrantRoleRequest.builder()
+                    .userId(devA.getId())
+                    .role("RELEASE_ENGINEER")
+                    .build();
+
+            mockMvc.perform(post("/api/v1/organizations/{orgId}/roles", orgA.getId())
+                            .with(user(new DevFlowUserDetails(adminA)))
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content(objectMapper.writeValueAsString(request)))
+                    .andExpect(status().isCreated())
+                    .andExpect(jsonPath("$.role").value("RELEASE_ENGINEER"))
+                    .andExpect(jsonPath("$.userId").value(devA.getId().toString()))
+                    .andExpect(jsonPath("$.active").value(true));
+        }
+
+        @Test
+        @DisplayName("Admin can grant custom role to an active member by custom role ID")
+        void admin_grantsCustomRoleById_success() throws Exception {
+            com.devflow.role.dto.CreateCustomRoleRequest customRoleReq = com.devflow.role.dto.CreateCustomRoleRequest.builder()
+                    .name("QA_LEAD")
+                    .displayName("QA Lead")
+                    .permissions(Set.of("project.read"))
+                    .build();
+            com.devflow.role.domain.CustomRoleEntity customRole = customRoleService.createCustomRole(orgA.getId(), adminA.getId(), customRoleReq);
+
+            GrantRoleRequest request = GrantRoleRequest.builder()
+                    .userId(devA.getId())
+                    .role(customRole.getId().toString())
+                    .build();
+
+            mockMvc.perform(post("/api/v1/organizations/{orgId}/roles", orgA.getId())
+                            .with(user(new DevFlowUserDetails(adminA)))
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content(objectMapper.writeValueAsString(request)))
+                    .andExpect(status().isCreated())
+                    .andExpect(jsonPath("$.role").value("QA_LEAD"))
+                    .andExpect(jsonPath("$.active").value(true));
+        }
+
+        @Test
+        @DisplayName("Granting disabled custom role is rejected (400 Bad Request)")
+        void grantingDisabledCustomRole_rejected() throws Exception {
+            com.devflow.role.dto.CreateCustomRoleRequest customRoleReq = com.devflow.role.dto.CreateCustomRoleRequest.builder()
+                    .name("DISABLED_ROLE")
+                    .displayName("Disabled Role")
+                    .permissions(Set.of("project.read"))
+                    .build();
+            com.devflow.role.domain.CustomRoleEntity customRole = customRoleService.createCustomRole(orgA.getId(), adminA.getId(), customRoleReq);
+
+            customRoleService.updateCustomRole(orgA.getId(), customRole.getId(), adminA.getId(),
+                    com.devflow.role.dto.UpdateCustomRoleRequest.builder().active(false).build());
+
+            GrantRoleRequest request = GrantRoleRequest.builder()
+                    .userId(devA.getId())
+                    .role("DISABLED_ROLE")
+                    .build();
+
+            mockMvc.perform(post("/api/v1/organizations/{orgId}/roles", orgA.getId())
+                            .with(user(new DevFlowUserDetails(adminA)))
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content(objectMapper.writeValueAsString(request)))
+                    .andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.status").value(400));
+        }
+
+        @Test
+        @DisplayName("Granting custom role from another organization is rejected (400 Bad Request)")
+        void grantingCrossTenantCustomRole_rejected() throws Exception {
+            com.devflow.role.dto.CreateCustomRoleRequest customRoleReq = com.devflow.role.dto.CreateCustomRoleRequest.builder()
+                    .name("ORG_B_ROLE")
+                    .displayName("Org B Role")
+                    .permissions(Set.of("project.read"))
+                    .build();
+            com.devflow.role.domain.CustomRoleEntity orgBRole = customRoleService.createCustomRole(orgB.getId(), userB.getId(), customRoleReq);
+
+            GrantRoleRequest request = GrantRoleRequest.builder()
+                    .userId(devA.getId())
+                    .role(orgBRole.getId().toString())
+                    .build();
+
+            mockMvc.perform(post("/api/v1/organizations/{orgId}/roles", orgA.getId())
+                            .with(user(new DevFlowUserDetails(adminA)))
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content(objectMapper.writeValueAsString(request)))
+                    .andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.status").value(400));
+        }
     }
 
     // ── 3. DELETE /api/v1/organizations/{orgId}/roles/{assignmentId} ──────────
@@ -354,6 +455,34 @@ class OrganizationRoleControllerIntegrationTest {
 
             Set<Role> roles = roleAssignmentService.getActiveOrganizationRoles(orgA.getId(), devA.getId());
             assertThat(roles).doesNotContain(Role.ORGANIZATION_ADMIN);
+        }
+
+        @Test
+        @DisplayName("Admin can revoke an active custom role assignment successfully")
+        void admin_revokesCustomRoleAssignment_success() throws Exception {
+            com.devflow.role.dto.CreateCustomRoleRequest customRoleReq = com.devflow.role.dto.CreateCustomRoleRequest.builder()
+                    .name("TEMP_COORDINATOR")
+                    .displayName("Temp Coordinator")
+                    .permissions(Set.of("project.read"))
+                    .build();
+            com.devflow.role.domain.CustomRoleEntity customRole = customRoleService.createCustomRole(orgA.getId(), adminA.getId(), customRoleReq);
+
+            com.devflow.role.domain.CustomRoleAssignment assignment = roleAssignmentService.assignCustomRole(
+                    orgA.getId(), devA.getId(), customRole.getId(), adminA.getId(), null
+            );
+            entityManager.flush();
+            entityManager.clear();
+
+            RevokeRoleRequest request = RevokeRoleRequest.builder()
+                    .reason("End of rotation")
+                    .build();
+
+            mockMvc.perform(delete("/api/v1/organizations/{orgId}/roles/{assignmentId}",
+                            orgA.getId(), assignment.getId())
+                            .with(user(new DevFlowUserDetails(adminA)))
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content(objectMapper.writeValueAsString(request)))
+                    .andExpect(status().isNoContent());
         }
 
         @Test
