@@ -360,4 +360,50 @@ class AuthorizationEvaluatorTest {
         assertThat(evaluator.isAuthorized(USER_ID, ORG_ID, PermissionRegistry.PROJECT_READ)).isTrue();
         assertThat(evaluator.isAuthorized(USER_ID, ORG_ID, PermissionRegistry.ORG_MANAGE)).isFalse();
     }
+
+    @Test
+    @DisplayName("Stage 7: Custom role permission resolver grants permissions not held by canonical role")
+    void shouldGrantPermissionFromCustomRolePermissionResolver() {
+        // User has only ORGANIZATION_MEMBER, which lacks analytics.export
+        AuthorizationRequest request = AuthorizationRequest.organization(
+                USER_ID, ORG_ID, PermissionRegistry.ANALYTICS_EXPORT);
+
+        assertThat(evaluator.authorize(request).allowed()).isFalse();
+
+        // Wire custom role permission resolver that resolves analytics.export
+        CustomRolePermissionResolver customRoleResolver = (userId, orgId) -> Set.of(PermissionRegistry.ANALYTICS_EXPORT);
+
+        AuthorizationEvaluator customEvaluator = AuthorizationEvaluator.builder()
+                .membershipValidator(membershipValidator)
+                .tenantBoundaryValidator(tenantBoundaryValidator)
+                .roleResolver(roleResolver)
+                .customRolePermissionResolver(customRoleResolver)
+                .build();
+
+        AuthorizationDecision decision = customEvaluator.authorize(request);
+        assertThat(decision.allowed()).isTrue();
+        assertThat(decision.message()).isEqualTo("Access granted");
+    }
+
+    @Test
+    @DisplayName("Stage 7: Custom role permission resolver failing unexpectedly fails closed")
+    void shouldFailClosedWhenCustomRoleResolverThrows() {
+        CustomRolePermissionResolver failingResolver = (userId, orgId) -> {
+            throw new RuntimeException("DB connection error");
+        };
+
+        AuthorizationEvaluator failingEvaluator = AuthorizationEvaluator.builder()
+                .membershipValidator(membershipValidator)
+                .tenantBoundaryValidator(tenantBoundaryValidator)
+                .roleResolver(roleResolver)
+                .customRolePermissionResolver(failingResolver)
+                .build();
+
+        AuthorizationRequest request = AuthorizationRequest.organization(
+                USER_ID, ORG_ID, PermissionRegistry.ANALYTICS_EXPORT);
+
+        AuthorizationDecision decision = failingEvaluator.authorize(request);
+        assertThat(decision.allowed()).isFalse();
+        assertThat(decision.denialReason()).isEqualTo(DenialReason.INSUFFICIENT_PERMISSIONS);
+    }
 }

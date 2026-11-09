@@ -69,6 +69,7 @@ public class AuthorizationEvaluator implements AuthApi {
     private final PermissionRegistry permissionRegistry;
     private final RolePermissionMapping rolePermissionMapping;
     private final RoleResolver roleResolver;
+    private final CustomRolePermissionResolver customRolePermissionResolver;
     private final TenantBoundaryValidator tenantBoundaryValidator;
     private final MembershipValidator membershipValidator;
     private final ResourceOwnershipValidator resourceOwnershipValidator;
@@ -87,6 +88,9 @@ public class AuthorizationEvaluator implements AuthApi {
                 : RolePermissionMapping.canonical();
         this.roleResolver = builder.roleResolver != null
                 ? builder.roleResolver
+                : (userId, context) -> Collections.emptySet();
+        this.customRolePermissionResolver = builder.customRolePermissionResolver != null
+                ? builder.customRolePermissionResolver
                 : (userId, context) -> Collections.emptySet();
         this.tenantBoundaryValidator = builder.tenantBoundaryValidator != null
                 ? builder.tenantBoundaryValidator
@@ -241,7 +245,20 @@ public class AuthorizationEvaluator implements AuthApi {
 
         // ── 4. Role Resolution, Scope Enforcement & Inheritance ──────────────
         Set<Role> resolvedRoles = roleResolver.resolveRoles(userId, context);
-        if (resolvedRoles == null || resolvedRoles.isEmpty()) {
+        Set<Permission> customPermissions;
+        try {
+            customPermissions = (scope == RoleScope.ORGANIZATION || scope == RoleScope.PROJECT)
+                    ? customRolePermissionResolver.resolveCustomPermissions(userId, context)
+                    : Collections.emptySet();
+        } catch (Exception e) {
+            // Fail-closed on custom permission resolution errors
+            customPermissions = Collections.emptySet();
+        }
+        if (customPermissions == null) {
+            customPermissions = Collections.emptySet();
+        }
+
+        if ((resolvedRoles == null || resolvedRoles.isEmpty()) && customPermissions.isEmpty()) {
             AuthorizationDecision decision = AuthorizationDecision.deny(
                     DenialReason.INSUFFICIENT_PERMISSIONS,
                     "Principal has no assigned roles for the requested context"
@@ -256,9 +273,9 @@ public class AuthorizationEvaluator implements AuthApi {
 
         if (scope == RoleScope.PLATFORM) {
             // Only platform roles grant platform permissions
-            Set<Role> platformRoles = resolvedRoles.stream()
+            Set<Role> platformRoles = resolvedRoles != null ? resolvedRoles.stream()
                     .filter(Role::isPlatformRole)
-                    .collect(Collectors.toUnmodifiableSet());
+                    .collect(Collectors.toUnmodifiableSet()) : Collections.emptySet();
 
             if (!platformRoles.isEmpty()) {
                 roleScopeMatchFound = true;
@@ -266,23 +283,28 @@ public class AuthorizationEvaluator implements AuthApi {
             }
         } else if (scope == RoleScope.ORGANIZATION) {
             // Only organization roles grant organization permissions (project roles cannot grant org permissions)
-            Set<Role> orgRoles = resolvedRoles.stream()
+            Set<Role> orgRoles = resolvedRoles != null ? resolvedRoles.stream()
                     .filter(Role::isOrganizationRole)
-                    .collect(Collectors.toUnmodifiableSet());
+                    .collect(Collectors.toUnmodifiableSet()) : Collections.emptySet();
 
             if (!orgRoles.isEmpty()) {
                 roleScopeMatchFound = true;
                 grantedPermissions.addAll(rolePermissionMapping.getPermissionsForRoles(orgRoles, RoleScope.ORGANIZATION));
             }
+
+            if (!customPermissions.isEmpty()) {
+                roleScopeMatchFound = true;
+                grantedPermissions.addAll(customPermissions);
+            }
         } else if (scope == RoleScope.PROJECT) {
             // Project scope evaluation with hierarchical parent-to-child inheritance (§4.2, ADR-001)
-            Set<Role> projectRoles = resolvedRoles.stream()
+            Set<Role> projectRoles = resolvedRoles != null ? resolvedRoles.stream()
                     .filter(Role::isProjectRole)
-                    .collect(Collectors.toSet());
+                    .collect(Collectors.toSet()) : new HashSet<>();
 
-            Set<Role> orgRoles = resolvedRoles.stream()
+            Set<Role> orgRoles = resolvedRoles != null ? resolvedRoles.stream()
                     .filter(Role::isOrganizationRole)
-                    .collect(Collectors.toSet());
+                    .collect(Collectors.toSet()) : new HashSet<>();
 
             // Check organization-level inheritance into projects
             boolean hasOrgAdminOrOwner = orgRoles.contains(Role.ORGANIZATION_OWNER) || orgRoles.contains(Role.ORGANIZATION_ADMIN);
@@ -324,6 +346,12 @@ public class AuthorizationEvaluator implements AuthApi {
             if (!projectRoles.isEmpty()) {
                 roleScopeMatchFound = true;
                 grantedPermissions.addAll(rolePermissionMapping.getPermissionsForRoles(projectRoles, RoleScope.PROJECT));
+            }
+
+            // Add permissions from custom roles (organization-scoped custom roles grant their permissions in the tenant)
+            if (!customPermissions.isEmpty()) {
+                roleScopeMatchFound = true;
+                grantedPermissions.addAll(customPermissions);
             }
         }
 
@@ -497,6 +525,7 @@ public class AuthorizationEvaluator implements AuthApi {
         private PermissionRegistry permissionRegistry;
         private RolePermissionMapping rolePermissionMapping;
         private RoleResolver roleResolver;
+        private CustomRolePermissionResolver customRolePermissionResolver;
         private TenantBoundaryValidator tenantBoundaryValidator;
         private MembershipValidator membershipValidator;
         private ResourceOwnershipValidator resourceOwnershipValidator;
@@ -518,6 +547,11 @@ public class AuthorizationEvaluator implements AuthApi {
 
         public Builder roleResolver(RoleResolver roleResolver) {
             this.roleResolver = roleResolver;
+            return this;
+        }
+
+        public Builder customRolePermissionResolver(CustomRolePermissionResolver customRolePermissionResolver) {
+            this.customRolePermissionResolver = customRolePermissionResolver;
             return this;
         }
 
