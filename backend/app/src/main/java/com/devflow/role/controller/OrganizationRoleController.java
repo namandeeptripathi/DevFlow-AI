@@ -1,11 +1,14 @@
 package com.devflow.role.controller;
 
 import com.devflow.modules.auth.domain.Role;
+import com.devflow.role.domain.CustomRoleAssignment;
+import com.devflow.role.domain.CustomRoleEntity;
 import com.devflow.role.domain.OrganizationRoleAssignment;
 import com.devflow.role.dto.GrantRoleRequest;
 import com.devflow.role.dto.RevokeRoleRequest;
 import com.devflow.role.dto.RoleAssignmentResponse;
 import com.devflow.role.exception.InvalidRoleAssignmentException;
+import com.devflow.role.exception.RoleAssignmentNotFoundException;
 import com.devflow.role.service.RoleAssignmentService;
 import com.devflow.security.user.DevFlowUserDetails;
 import io.swagger.v3.oas.annotations.Operation;
@@ -28,8 +31,11 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.UUID;
 
 /**
@@ -80,18 +86,20 @@ public class OrganizationRoleController {
             @RequestParam(required = false, defaultValue = "true") boolean activeOnly,
             @AuthenticationPrincipal DevFlowUserDetails userDetails
     ) {
-        List<OrganizationRoleAssignment> assignments = roleAssignmentService.listOrganizationRoleAssignments(
+        List<OrganizationRoleAssignment> canonicalAssignments = roleAssignmentService.listOrganizationRoleAssignments(
+                organizationId, userDetails.getId(), activeOnly);
+        List<CustomRoleAssignment> customAssignments = roleAssignmentService.listCustomRoleAssignments(
                 organizationId, userDetails.getId(), activeOnly);
 
-        List<RoleAssignmentResponse> response = assignments.stream()
-                .map(RoleAssignmentResponse::from)
-                .toList();
+        List<RoleAssignmentResponse> response = new ArrayList<>();
+        canonicalAssignments.forEach(a -> response.add(RoleAssignmentResponse.from(a)));
+        customAssignments.forEach(a -> response.add(RoleAssignmentResponse.from(a)));
 
         return ResponseEntity.ok(response);
     }
 
     /**
-     * Grants an organization-scoped role to an organization member.
+     * Grants an organization-scoped role (canonical or custom) to an organization member.
      *
      * @param organizationId tenant organization UUID
      * @param request grant payload
@@ -100,7 +108,7 @@ public class OrganizationRoleController {
      */
     @PostMapping
     @Operation(summary = "Grant organization role",
-            description = "Assigns an organization-scoped role to a member. Requires OWNER or ADMIN role.",
+            description = "Assigns an organization-scoped canonical or custom role to a member. Requires OWNER or ADMIN role.",
             security = @SecurityRequirement(name = "bearerAuth"))
     @ApiResponses({
             @ApiResponse(responseCode = "201", description = "Role granted successfully",
@@ -115,21 +123,51 @@ public class OrganizationRoleController {
             @Valid @RequestBody GrantRoleRequest request,
             @AuthenticationPrincipal DevFlowUserDetails userDetails
     ) {
-        Role role = parseAndValidateOrgRole(request.getRole());
+        String roleStr = request.getRole();
+        if (roleStr == null || roleStr.isBlank()) {
+            throw new InvalidRoleAssignmentException("Role name must not be blank");
+        }
 
-        OrganizationRoleAssignment assignment = roleAssignmentService.assignOrganizationRole(
-                organizationId,
-                request.getUserId(),
-                role,
-                userDetails.getId(),
-                request.getExpiresAt()
-        );
+        // 1. Try canonical role first
+        Role canonicalRole = tryParseCanonicalRole(roleStr);
+        if (canonicalRole != null) {
+            if (canonicalRole.isPlatformRole()) {
+                throw new InvalidRoleAssignmentException("Platform roles cannot be assigned through organization APIs: " + canonicalRole);
+            }
+            if (!canonicalRole.isOrganizationRole()) {
+                throw new InvalidRoleAssignmentException("Cannot assign non-organization role to organization: " + canonicalRole);
+            }
 
-        return ResponseEntity.status(HttpStatus.CREATED).body(RoleAssignmentResponse.from(assignment));
+            OrganizationRoleAssignment assignment = roleAssignmentService.assignOrganizationRole(
+                    organizationId,
+                    request.getUserId(),
+                    canonicalRole,
+                    userDetails.getId(),
+                    request.getExpiresAt()
+            );
+
+            return ResponseEntity.status(HttpStatus.CREATED).body(RoleAssignmentResponse.from(assignment));
+        }
+
+        // 2. Try custom role by name or UUID in this organization
+        Optional<CustomRoleEntity> customRoleOpt = roleAssignmentService.findCustomRoleByNameOrId(organizationId, roleStr);
+        if (customRoleOpt.isPresent()) {
+            CustomRoleAssignment customAssignment = roleAssignmentService.assignCustomRole(
+                    organizationId,
+                    request.getUserId(),
+                    customRoleOpt.get().getId(),
+                    userDetails.getId(),
+                    request.getExpiresAt()
+            );
+
+            return ResponseEntity.status(HttpStatus.CREATED).body(RoleAssignmentResponse.from(customAssignment));
+        }
+
+        throw new InvalidRoleAssignmentException("Invalid role name: " + roleStr);
     }
 
     /**
-     * Revokes an organization role assignment.
+     * Revokes an organization role assignment (canonical or custom).
      *
      * @param organizationId tenant organization UUID
      * @param assignmentId assignment UUID to revoke
@@ -139,7 +177,7 @@ public class OrganizationRoleController {
      */
     @DeleteMapping("/{assignmentId}")
     @Operation(summary = "Revoke organization role assignment",
-            description = "Revokes an active organization role assignment. Requires OWNER or ADMIN role.",
+            description = "Revokes an active organization canonical or custom role assignment. Requires OWNER or ADMIN role.",
             security = @SecurityRequirement(name = "bearerAuth"))
     @ApiResponses({
             @ApiResponse(responseCode = "204", description = "Role assignment revoked successfully"),
@@ -157,37 +195,32 @@ public class OrganizationRoleController {
                 ? request.getReason().trim()
                 : "ADMIN_REVOCATION";
 
-        roleAssignmentService.revokeOrganizationRoleAssignment(
-                organizationId,
-                assignmentId,
-                userDetails.getId(),
-                reason
-        );
+        try {
+            roleAssignmentService.revokeOrganizationRoleAssignment(
+                    organizationId,
+                    assignmentId,
+                    userDetails.getId(),
+                    reason
+            );
+        } catch (RoleAssignmentNotFoundException e) {
+            // If not found as canonical, attempt revoking as custom role assignment
+            roleAssignmentService.revokeCustomRoleAssignment(
+                    organizationId,
+                    assignmentId,
+                    userDetails.getId(),
+                    reason
+            );
+        }
 
         return ResponseEntity.noContent().build();
     }
 
-    private Role parseAndValidateOrgRole(String roleStr) {
-        if (roleStr == null || roleStr.isBlank()) {
-            throw new InvalidRoleAssignmentException("Role name must not be blank");
-        }
-
-        Role role;
+    private Role tryParseCanonicalRole(String roleStr) {
         try {
-            role = Role.valueOf(roleStr.trim().toUpperCase());
+            return Role.valueOf(roleStr.trim().toUpperCase(Locale.ROOT));
         } catch (IllegalArgumentException e) {
-            throw new InvalidRoleAssignmentException("Invalid role name: " + roleStr);
+            return null;
         }
-
-        if (role.isPlatformRole()) {
-            throw new InvalidRoleAssignmentException("Platform roles cannot be assigned through organization APIs: " + role);
-        }
-
-        if (!role.isOrganizationRole()) {
-            throw new InvalidRoleAssignmentException("Cannot assign non-organization role to organization: " + role);
-        }
-
-        return role;
     }
 }
 
