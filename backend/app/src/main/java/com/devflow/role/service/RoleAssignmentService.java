@@ -1,5 +1,6 @@
 package com.devflow.role.service;
 
+import com.devflow.modules.auth.domain.Permission;
 import com.devflow.modules.auth.domain.Role;
 import com.devflow.modules.auth.evaluator.TenantBoundaryValidator;
 import com.devflow.organization.domain.Organization;
@@ -9,6 +10,8 @@ import com.devflow.organization.exception.OrganizationNotFoundException;
 import com.devflow.organization.repository.OrganizationMemberRepository;
 import com.devflow.organization.repository.OrganizationRepository;
 import com.devflow.role.adapter.DatabaseRoleResolver;
+import com.devflow.role.domain.CustomRoleAssignment;
+import com.devflow.role.domain.CustomRoleEntity;
 import com.devflow.role.domain.OrganizationRoleAssignment;
 import com.devflow.role.domain.ProjectRoleAssignment;
 import com.devflow.role.domain.RoleEntity;
@@ -16,6 +19,8 @@ import com.devflow.role.exception.InvalidRoleAssignmentException;
 import com.devflow.role.exception.RoleAssignmentAccessDeniedException;
 import com.devflow.role.exception.RoleAssignmentAlreadyExistsException;
 import com.devflow.role.exception.RoleAssignmentNotFoundException;
+import com.devflow.role.repository.CustomRoleAssignmentRepository;
+import com.devflow.role.repository.CustomRoleRepository;
 import com.devflow.role.repository.OrganizationRoleAssignmentRepository;
 import com.devflow.security.authorization.cache.AuthorizationCacheService;
 import com.devflow.role.repository.ProjectRoleAssignmentRepository;
@@ -32,6 +37,7 @@ import org.springframework.transaction.annotation.Transactional;
 import java.time.Instant;
 import java.util.Collections;
 import java.util.List;
+import java.util.Locale;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
@@ -65,6 +71,15 @@ public class RoleAssignmentService {
     private final UserRepository userRepository;
     private TenantBoundaryValidator tenantBoundaryValidator;
     private AuthorizationCacheService cacheService;
+
+    @Autowired(required = false)
+    private CustomRoleRepository customRoleRepository;
+
+    @Autowired(required = false)
+    private CustomRoleAssignmentRepository customRoleAssignmentRepository;
+
+    @Autowired(required = false)
+    private PermissionGovernanceService permissionGovernanceService;
 
     @Autowired
     public RoleAssignmentService(
@@ -106,6 +121,18 @@ public class RoleAssignmentService {
 
     public void setCacheService(AuthorizationCacheService cacheService) {
         this.cacheService = cacheService;
+    }
+
+    public void setCustomRoleRepository(CustomRoleRepository customRoleRepository) {
+        this.customRoleRepository = customRoleRepository;
+    }
+
+    public void setCustomRoleAssignmentRepository(CustomRoleAssignmentRepository customRoleAssignmentRepository) {
+        this.customRoleAssignmentRepository = customRoleAssignmentRepository;
+    }
+
+    public void setPermissionGovernanceService(PermissionGovernanceService permissionGovernanceService) {
+        this.permissionGovernanceService = permissionGovernanceService;
     }
 
     // ── Organization Role Assignments ─────────────────────────────────────────
@@ -391,6 +418,214 @@ public class RoleAssignmentService {
                 revokedByUserId,
                 reason != null && !reason.isBlank() ? reason : "ADMIN_REVOCATION"
         );
+    }
+
+    // ── Custom Role Assignments (Stage 7) ─────────────────────────────────────
+
+    /**
+     * Assigns an organization-scoped custom role to an active organization member.
+     *
+     * @param organizationId tenant organization UUID
+     * @param targetUserId user receiving the custom role
+     * @param customRoleId custom role UUID
+     * @param assignedByUserId user performing the assignment
+     * @param expiresAt optional expiration timestamp
+     * @return the persisted {@link CustomRoleAssignment}
+     */
+    @Transactional
+    public CustomRoleAssignment assignCustomRole(
+            UUID organizationId,
+            UUID targetUserId,
+            UUID customRoleId,
+            UUID assignedByUserId,
+            Instant expiresAt
+    ) {
+        Objects.requireNonNull(organizationId, "organizationId must not be null");
+        Objects.requireNonNull(targetUserId, "targetUserId must not be null");
+        Objects.requireNonNull(customRoleId, "customRoleId must not be null");
+        Objects.requireNonNull(assignedByUserId, "assignedByUserId must not be null");
+
+        Organization org = organizationRepository.findById(organizationId)
+                .orElseThrow(() -> new OrganizationNotFoundException("Organization not found: " + organizationId));
+
+        User targetUser = userRepository.findById(targetUserId)
+                .orElseThrow(() -> new UserProfileNotFoundException("Target user not found: " + targetUserId));
+
+        User assignedByUser = userRepository.findById(assignedByUserId)
+                .orElseThrow(() -> new UserProfileNotFoundException("Assigned-by user not found: " + assignedByUserId));
+
+        // Enforce active organization membership requirement for target user
+        OrganizationMember member = organizationMemberRepository.findByOrganizationIdAndUserId(organizationId, targetUserId)
+                .orElseThrow(() -> new InvalidRoleAssignmentException(
+                        "User [" + targetUserId + "] is not a member of organization [" + organizationId + "]"));
+
+        if (member.getStatus() != OrganizationMembershipStatus.ACTIVE) {
+            throw new InvalidRoleAssignmentException(
+                    "User [" + targetUserId + "] membership status is [" + member.getStatus() + "]; must be ACTIVE to receive roles");
+        }
+
+        // Caller authorization check: requires OWNER or ADMIN
+        Set<Role> callerRoles = getActiveOrganizationRoles(organizationId, assignedByUserId);
+        boolean isCallerOwner = callerRoles.contains(Role.ORGANIZATION_OWNER);
+        boolean isCallerAdmin = callerRoles.contains(Role.ORGANIZATION_ADMIN);
+
+        if (!isCallerOwner && !isCallerAdmin) {
+            throw new RoleAssignmentAccessDeniedException(
+                    "User [" + assignedByUserId + "] is not authorized to assign custom roles in organization [" + organizationId + "]. Requires ORGANIZATION_OWNER or ORGANIZATION_ADMIN.");
+        }
+
+        // Custom role lookup and tenant isolation
+        if (customRoleRepository == null) {
+            throw new IllegalStateException("CustomRoleRepository is not available");
+        }
+
+        CustomRoleEntity customRole = customRoleRepository.findByIdAndOrganizationIdWithPermissions(customRoleId, organizationId)
+                .orElseThrow(() -> new InvalidRoleAssignmentException(
+                        "Custom role [" + customRoleId + "] not found in organization [" + organizationId + "]"));
+
+        // Active state check: disabled custom roles cannot be assigned
+        if (!customRole.isActive()) {
+            throw new InvalidRoleAssignmentException(
+                    "Cannot assign disabled custom role [" + customRole.getName() + "] in organization [" + organizationId + "]");
+        }
+
+        // Delegation authority check: caller must hold all permissions that this custom role grants
+        if (permissionGovernanceService != null && !isCallerOwner) {
+            Set<Permission> rolePermissions = customRole.getRolePermissions().stream()
+                    .filter(rp -> rp.getPermission() != null)
+                    .map(rp -> rp.getPermission().toDomainPermission())
+                    .collect(Collectors.toSet());
+            permissionGovernanceService.validateDelegationAuthority(organizationId, assignedByUserId, rolePermissions);
+        }
+
+        if (customRoleAssignmentRepository == null) {
+            throw new IllegalStateException("CustomRoleAssignmentRepository is not available");
+        }
+
+        Instant now = Instant.now();
+        if (customRoleAssignmentRepository.hasActiveAssignment(organizationId, targetUserId, customRoleId, now)) {
+            throw new RoleAssignmentAlreadyExistsException(
+                    "User [" + targetUserId + "] already holds an active assignment for custom role [" + customRole.getName() + "] in organization [" + organizationId + "]");
+        }
+
+        // Supersede expired unrevoked assignments for this custom role
+        List<CustomRoleAssignment> expiredAssignments = customRoleAssignmentRepository.findExpiredUnrevoked(
+                organizationId, targetUserId, customRoleId, now);
+        for (CustomRoleAssignment expired : expiredAssignments) {
+            expired.revoke(assignedByUser, "EXPIRED_SUPERSEDED", now);
+            customRoleAssignmentRepository.save(expired);
+        }
+
+        CustomRoleAssignment assignment = CustomRoleAssignment.builder()
+                .organization(org)
+                .user(targetUser)
+                .customRole(customRole)
+                .assignedBy(assignedByUser)
+                .assignedAt(now)
+                .expiresAt(expiresAt)
+                .build();
+
+        CustomRoleAssignment saved = customRoleAssignmentRepository.save(assignment);
+        if (cacheService != null) {
+            cacheService.evictUser(organizationId, targetUserId);
+        }
+        log.info("Assigned custom role [{}] ({}) to user [{}] in organization [{}] by [{}]",
+                customRole.getName(), customRoleId, targetUserId, organizationId, assignedByUserId);
+        return saved;
+    }
+
+    /**
+     * Revokes an active custom role assignment by assignment UUID.
+     */
+    @Transactional
+    public CustomRoleAssignment revokeCustomRoleAssignment(
+            UUID organizationId,
+            UUID assignmentId,
+            UUID revokedByUserId,
+            String reason
+    ) {
+        Objects.requireNonNull(organizationId, "organizationId must not be null");
+        Objects.requireNonNull(assignmentId, "assignmentId must not be null");
+        Objects.requireNonNull(revokedByUserId, "revokedByUserId must not be null");
+
+        User revokedByUser = userRepository.findById(revokedByUserId)
+                .orElseThrow(() -> new UserProfileNotFoundException("Revoked-by user not found: " + revokedByUserId));
+
+        Set<Role> callerRoles = getActiveOrganizationRoles(organizationId, revokedByUserId);
+        if (!callerRoles.contains(Role.ORGANIZATION_OWNER) && !callerRoles.contains(Role.ORGANIZATION_ADMIN)) {
+            throw new RoleAssignmentAccessDeniedException(
+                    "User [" + revokedByUserId + "] is not authorized to revoke roles in organization [" + organizationId + "]. Requires ORGANIZATION_OWNER or ORGANIZATION_ADMIN.");
+        }
+
+        if (customRoleAssignmentRepository == null) {
+            throw new IllegalStateException("CustomRoleAssignmentRepository is not available");
+        }
+
+        CustomRoleAssignment assignment = customRoleAssignmentRepository.findById(assignmentId)
+                .orElseThrow(() -> new RoleAssignmentNotFoundException("Custom role assignment not found with ID: " + assignmentId));
+
+        if (!assignment.getOrganization().getId().equals(organizationId)) {
+            throw new RoleAssignmentNotFoundException("Custom role assignment [" + assignmentId + "] does not belong to organization [" + organizationId + "]");
+        }
+
+        Instant now = Instant.now();
+        assignment.revoke(revokedByUser, reason != null && !reason.isBlank() ? reason : "ADMIN_REVOCATION", now);
+        CustomRoleAssignment updated = customRoleAssignmentRepository.save(assignment);
+        if (cacheService != null) {
+            cacheService.evictUser(organizationId, assignment.getUser().getId());
+        }
+        log.info("Revoked custom role assignment [{}] for user [{}] in organization [{}] by [{}]",
+                assignmentId, assignment.getUser().getId(), organizationId, revokedByUserId);
+        return updated;
+    }
+
+    /**
+     * Lists custom role assignments for an organization.
+     */
+    @Transactional(readOnly = true)
+    public List<CustomRoleAssignment> listCustomRoleAssignments(
+            UUID organizationId,
+            UUID callerUserId,
+            boolean activeOnly
+    ) {
+        Objects.requireNonNull(organizationId, "organizationId must not be null");
+        Objects.requireNonNull(callerUserId, "callerUserId must not be null");
+
+        Set<Role> callerRoles = getActiveOrganizationRoles(organizationId, callerUserId);
+        if (!callerRoles.contains(Role.ORGANIZATION_OWNER) && !callerRoles.contains(Role.ORGANIZATION_ADMIN)) {
+            throw new RoleAssignmentAccessDeniedException(
+                    "User [" + callerUserId + "] is not authorized to list roles in organization [" + organizationId + "]. Requires ORGANIZATION_OWNER or ORGANIZATION_ADMIN.");
+        }
+
+        if (customRoleAssignmentRepository == null) {
+            return Collections.emptyList();
+        }
+
+        if (activeOnly) {
+            return customRoleAssignmentRepository.findActiveByOrganizationId(organizationId, Instant.now());
+        } else {
+            return customRoleAssignmentRepository.findAllWithDetailsByOrganizationId(organizationId);
+        }
+    }
+
+    /**
+     * Resolves a custom role by its programmatic name or UUID string within an organization.
+     */
+    @Transactional(readOnly = true)
+    public Optional<CustomRoleEntity> findCustomRoleByNameOrId(UUID organizationId, String roleIdentifier) {
+        if (customRoleRepository == null || roleIdentifier == null || roleIdentifier.isBlank()) {
+            return Optional.empty();
+        }
+        String trimmed = roleIdentifier.trim();
+        try {
+            UUID roleId = UUID.fromString(trimmed);
+            Optional<CustomRoleEntity> byId = customRoleRepository.findByIdAndOrganizationIdWithPermissions(roleId, organizationId);
+            if (byId.isPresent()) {
+                return byId;
+            }
+        } catch (IllegalArgumentException ignored) {
+        }
+        return customRoleRepository.findByOrganizationIdAndName(organizationId, trimmed.toUpperCase(Locale.ROOT));
     }
 
     // ── Project Role Assignments ──────────────────────────────────────────────

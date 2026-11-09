@@ -37,4 +37,12 @@ public interface PermissionRepository extends JpaRepository<PermissionEntity, UU
      * @return {@code true} if present; {@code false} otherwise
      */
     boolean existsByName(String name);
+
+    /**
+     * Finds permissions matching any of the given canonical names.
+     *
+     * @param names collection of canonical permission strings
+     * @return list of matching permissions
+     */
+    List<PermissionEntity> findByNameIn(java.util.Collection<String> names);
 }

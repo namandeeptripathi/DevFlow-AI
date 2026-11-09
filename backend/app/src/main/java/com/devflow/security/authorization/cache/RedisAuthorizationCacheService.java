@@ -1,5 +1,6 @@
 package com.devflow.security.authorization.cache;
 
+import com.devflow.modules.auth.domain.Permission;
 import com.devflow.modules.auth.domain.Role;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
@@ -14,6 +15,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.Collections;
 import java.util.EnumSet;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -134,6 +136,30 @@ public class RedisAuthorizationCacheService implements AuthorizationCacheService
         putInCache(key, active);
     }
 
+    // ── Custom Role Permissions (Stage 7) ────────────────────────────────────
+
+    @Override
+    public Optional<Set<Permission>> getCustomRolePermissions(UUID organizationId, UUID userId) {
+        if (!properties.isEnabled() || organizationId == null || userId == null) {
+            return Optional.empty();
+        }
+
+        String key = buildCustomPermsKey(organizationId, userId);
+        return getFromCache(key, new TypeReference<List<String>>() {})
+                .map(this::deserializePermissions);
+    }
+
+    @Override
+    public void putCustomRolePermissions(UUID organizationId, UUID userId, Set<Permission> permissions) {
+        if (!properties.isEnabled() || organizationId == null || userId == null || permissions == null) {
+            return;
+        }
+
+        String key = buildCustomPermsKey(organizationId, userId);
+        List<String> permNames = permissions.stream().map(Permission::value).toList();
+        putInCache(key, permNames);
+    }
+
     // ── Invalidation Operations ───────────────────────────────────────────────
 
     @Override
@@ -144,9 +170,10 @@ public class RedisAuthorizationCacheService implements AuthorizationCacheService
 
         String orgRolesKey = buildOrgRolesKey(organizationId, userId);
         String memberKey = buildMembershipKey(organizationId, userId);
+        String customPermsKey = buildCustomPermsKey(organizationId, userId);
         String projPattern = properties.getKeyPrefix() + "roles:proj:" + organizationId + ":*:" + userId;
 
-        evictKeys(List.of(orgRolesKey, memberKey), projPattern);
+        evictKeys(List.of(orgRolesKey, memberKey, customPermsKey), projPattern);
         log.debug("Evicted authorization cache for user [{}] in organization [{}]", userId, organizationId);
     }
 
@@ -159,6 +186,17 @@ public class RedisAuthorizationCacheService implements AuthorizationCacheService
         String projKey = buildProjRolesKey(organizationId, projectId, userId);
         evictKeys(List.of(projKey), null);
         log.debug("Evicted project authorization cache for user [{}] in project [{}] (org [{}])", userId, projectId, organizationId);
+    }
+
+    @Override
+    public void evictCustomRole(UUID organizationId, UUID customRoleId) {
+        if (organizationId == null) {
+            return;
+        }
+
+        String customPermsPattern = properties.getKeyPrefix() + "perms:custom:org:" + organizationId + ":*";
+        evictKeys(Collections.emptyList(), customPermsPattern);
+        log.debug("Evicted custom role permissions for role [{}] across organization [{}]", customRoleId, organizationId);
     }
 
     @Override
@@ -199,6 +237,10 @@ public class RedisAuthorizationCacheService implements AuthorizationCacheService
 
     private String buildMembershipKey(UUID orgId, UUID userId) {
         return properties.getKeyPrefix() + "member:" + orgId + ":" + userId;
+    }
+
+    private String buildCustomPermsKey(UUID orgId, UUID userId) {
+        return properties.getKeyPrefix() + "perms:custom:org:" + orgId + ":" + userId;
     }
 
     // ── Cache Access & Fallback Logic ─────────────────────────────────────────
@@ -300,5 +342,20 @@ public class RedisAuthorizationCacheService implements AuthorizationCacheService
             }
         }
         return Collections.unmodifiableSet(roles);
+    }
+
+    private Set<Permission> deserializePermissions(List<String> permStrings) {
+        if (permStrings == null || permStrings.isEmpty()) {
+            return Collections.emptySet();
+        }
+        Set<Permission> perms = new HashSet<>();
+        for (String s : permStrings) {
+            try {
+                perms.add(Permission.of(s.trim()));
+            } catch (IllegalArgumentException e) {
+                log.warn("Ignoring unrecognized permission in cache: [{}]", s);
+            }
+        }
+        return Collections.unmodifiableSet(perms);
     }
 }

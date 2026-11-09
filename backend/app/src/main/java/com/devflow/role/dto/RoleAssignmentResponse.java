@@ -1,5 +1,6 @@
 package com.devflow.role.dto;
 
+import com.devflow.role.domain.CustomRoleAssignment;
 import com.devflow.role.domain.OrganizationRoleAssignment;
 import com.devflow.role.domain.ProjectRoleAssignment;
 import io.swagger.v3.oas.annotations.media.Schema;
@@ -104,6 +105,31 @@ public class RoleAssignmentResponse {
                 .userEmail(assignment.getUser() != null ? assignment.getUser().getEmail() : null)
                 .role(assignment.getRole() != null ? assignment.getRole().getName() : null)
                 .roleScope(assignment.getRoleScope() != null ? assignment.getRoleScope().name() : null)
+                .assignedByUserId(assignment.getAssignedBy() != null ? assignment.getAssignedBy().getId() : null)
+                .assignedAt(assignment.getAssignedAt())
+                .expiresAt(assignment.getExpiresAt())
+                .revokedAt(assignment.getRevokedAt())
+                .revocationReason(assignment.getRevocationReason())
+                .active(assignment.isActive())
+                .build();
+    }
+
+    /**
+     * Converts a {@link CustomRoleAssignment} entity to a {@link RoleAssignmentResponse} DTO (Stage 7).
+     */
+    public static RoleAssignmentResponse from(CustomRoleAssignment assignment) {
+        if (assignment == null) {
+            return null;
+        }
+        return RoleAssignmentResponse.builder()
+                .id(assignment.getId())
+                .organizationId(assignment.getOrganization() != null ? assignment.getOrganization().getId() : null)
+                .projectId(null)
+                .userId(assignment.getUser() != null ? assignment.getUser().getId() : null)
+                .username(assignment.getUser() != null ? assignment.getUser().getUsername() : null)
+                .userEmail(assignment.getUser() != null ? assignment.getUser().getEmail() : null)
+                .role(assignment.getCustomRole() != null ? assignment.getCustomRole().getName() : null)
+                .roleScope("ORGANIZATION")
                 .assignedByUserId(assignment.getAssignedBy() != null ? assignment.getAssignedBy().getId() : null)
                 .assignedAt(assignment.getAssignedAt())
                 .expiresAt(assignment.getExpiresAt())

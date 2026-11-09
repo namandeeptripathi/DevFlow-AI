@@ -1,5 +1,6 @@
 package com.devflow.security.authorization.cache;
 
+import com.devflow.modules.auth.domain.Permission;
 import com.devflow.modules.auth.domain.Role;
 
 import java.util.Optional;
@@ -84,7 +85,25 @@ public interface AuthorizationCacheService {
     void putMemberActive(UUID organizationId, UUID userId, boolean active);
 
     /**
-     * Evicts all authorization cache entries (roles and membership) for the user in the organization.
+     * Retrieves cached custom role permissions for the specified user and organization (Stage 7).
+     *
+     * @param organizationId tenant organization UUID
+     * @param userId target user UUID
+     * @return optional containing the cached permissions set, or empty on cache miss / error
+     */
+    Optional<Set<Permission>> getCustomRolePermissions(UUID organizationId, UUID userId);
+
+    /**
+     * Stores resolved custom role permissions in cache (Stage 7).
+     *
+     * @param organizationId tenant organization UUID
+     * @param userId target user UUID
+     * @param permissions resolved canonical permissions
+     */
+    void putCustomRolePermissions(UUID organizationId, UUID userId, Set<Permission> permissions);
+
+    /**
+     * Evicts all authorization cache entries (roles, membership, custom permissions) for the user in the organization.
      *
      * @param organizationId tenant organization UUID
      * @param userId target user UUID
@@ -99,6 +118,14 @@ public interface AuthorizationCacheService {
      * @param userId target user UUID
      */
     void evictUserProject(UUID organizationId, UUID projectId, UUID userId);
+
+    /**
+     * Evicts cached custom role permissions and definitions across an organization when a custom role is modified (Stage 7).
+     *
+     * @param organizationId tenant organization UUID
+     * @param customRoleId custom role UUID
+     */
+    void evictCustomRole(UUID organizationId, UUID customRoleId);
 
     /**
      * Evicts all authorization cache entries for the entire organization tenant.

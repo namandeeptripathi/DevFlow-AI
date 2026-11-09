@@ -17,7 +17,14 @@ import com.devflow.organization.exception.OrganizationMemberAlreadyExistsExcepti
 import com.devflow.organization.exception.OrganizationMemberNotFoundException;
 import com.devflow.organization.exception.OrganizationMembershipRequiredException;
 import com.devflow.organization.exception.OrganizationNotFoundException;
+import com.devflow.role.exception.CustomRoleAccessDeniedException;
+import com.devflow.role.exception.CustomRoleAlreadyExistsException;
+import com.devflow.role.exception.CustomRoleDeletionException;
+import com.devflow.role.exception.CustomRoleException;
+import com.devflow.role.exception.CustomRoleNotFoundException;
+import com.devflow.role.exception.InvalidCustomRoleException;
 import com.devflow.role.exception.InvalidRoleAssignmentException;
+import com.devflow.role.exception.PermissionGovernanceException;
 import com.devflow.role.exception.RoleAssignmentAccessDeniedException;
 import com.devflow.role.exception.RoleAssignmentAlreadyExistsException;
 import com.devflow.role.exception.RoleAssignmentException;
@@ -314,6 +321,71 @@ public class GlobalExceptionHandler {
             HttpServletRequest request
     ) {
         log.warn("Role assignment error on [{}]: {}", request.getRequestURI(), ex.getMessage());
+        return buildErrorResponse(HttpStatus.BAD_REQUEST, "Bad Request", ex.getMessage(), request.getRequestURI());
+    }
+
+    // ── Custom Role domain (Stage 7) ──────────────────────────────────────────
+
+    @ExceptionHandler(CustomRoleNotFoundException.class)
+    public ResponseEntity<Map<String, Object>> handleCustomRoleNotFound(
+            CustomRoleNotFoundException ex,
+            HttpServletRequest request
+    ) {
+        log.warn("Custom role not found on [{}]: {}", request.getRequestURI(), ex.getMessage());
+        return buildErrorResponse(HttpStatus.NOT_FOUND, "Not Found", ex.getMessage(), request.getRequestURI());
+    }
+
+    @ExceptionHandler(CustomRoleAlreadyExistsException.class)
+    public ResponseEntity<Map<String, Object>> handleCustomRoleAlreadyExists(
+            CustomRoleAlreadyExistsException ex,
+            HttpServletRequest request
+    ) {
+        log.warn("Custom role conflict on [{}]: {}", request.getRequestURI(), ex.getMessage());
+        return buildErrorResponse(HttpStatus.CONFLICT, "Conflict", ex.getMessage(), request.getRequestURI());
+    }
+
+    @ExceptionHandler(CustomRoleAccessDeniedException.class)
+    public ResponseEntity<Map<String, Object>> handleCustomRoleAccessDenied(
+            CustomRoleAccessDeniedException ex,
+            HttpServletRequest request
+    ) {
+        log.warn("Custom role access denied on [{}]: {}", request.getRequestURI(), ex.getMessage());
+        return buildErrorResponse(HttpStatus.FORBIDDEN, "Forbidden", ex.getMessage(), request.getRequestURI());
+    }
+
+    @ExceptionHandler(CustomRoleDeletionException.class)
+    public ResponseEntity<Map<String, Object>> handleCustomRoleDeletion(
+            CustomRoleDeletionException ex,
+            HttpServletRequest request
+    ) {
+        log.warn("Custom role deletion error on [{}]: {}", request.getRequestURI(), ex.getMessage());
+        return buildErrorResponse(HttpStatus.CONFLICT, "Conflict", ex.getMessage(), request.getRequestURI());
+    }
+
+    @ExceptionHandler(InvalidCustomRoleException.class)
+    public ResponseEntity<Map<String, Object>> handleInvalidCustomRole(
+            InvalidCustomRoleException ex,
+            HttpServletRequest request
+    ) {
+        log.warn("Invalid custom role error on [{}]: {}", request.getRequestURI(), ex.getMessage());
+        return buildErrorResponse(HttpStatus.BAD_REQUEST, "Bad Request", ex.getMessage(), request.getRequestURI());
+    }
+
+    @ExceptionHandler(PermissionGovernanceException.class)
+    public ResponseEntity<Map<String, Object>> handlePermissionGovernance(
+            PermissionGovernanceException ex,
+            HttpServletRequest request
+    ) {
+        log.warn("Permission governance violation on [{}]: {}", request.getRequestURI(), ex.getMessage());
+        return buildErrorResponse(HttpStatus.BAD_REQUEST, "Bad Request", ex.getMessage(), request.getRequestURI());
+    }
+
+    @ExceptionHandler(CustomRoleException.class)
+    public ResponseEntity<Map<String, Object>> handleCustomRoleException(
+            CustomRoleException ex,
+            HttpServletRequest request
+    ) {
+        log.warn("Custom role domain error on [{}]: {}", request.getRequestURI(), ex.getMessage());
         return buildErrorResponse(HttpStatus.BAD_REQUEST, "Bad Request", ex.getMessage(), request.getRequestURI());
     }
 

@@ -5,6 +5,7 @@ import com.devflow.modules.auth.api.AuthApi;
 import com.devflow.modules.auth.evaluator.AuthorizationEvaluator;
 import com.devflow.modules.auth.registry.PermissionRegistry;
 import com.devflow.modules.auth.registry.RolePermissionMapping;
+import com.devflow.role.adapter.DatabaseCustomRolePermissionResolver;
 import com.devflow.role.adapter.DatabaseMembershipValidator;
 import com.devflow.role.adapter.DatabaseProjectAssignmentValidator;
 import com.devflow.role.adapter.DatabaseResourceOwnershipValidator;
@@ -13,6 +14,7 @@ import com.devflow.role.adapter.DatabaseRoleResolver;
 import com.devflow.role.adapter.DatabaseTenantBoundaryValidator;
 import com.devflow.role.adapter.DefaultEmergencyAccessValidator;
 import com.devflow.role.adapter.DefaultPlatformSupportValidator;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
@@ -57,6 +59,7 @@ public class AuthorizationConfiguration {
             PermissionRegistry permissionRegistry,
             RolePermissionMapping rolePermissionMapping,
             DatabaseRoleResolver roleResolver,
+            @Autowired(required = false) DatabaseCustomRolePermissionResolver customRolePermissionResolver,
             DatabaseMembershipValidator membershipValidator,
             DatabaseProjectAssignmentValidator projectAssignmentValidator,
             DatabaseTenantBoundaryValidator tenantBoundaryValidator,
@@ -81,7 +84,7 @@ public class AuthorizationConfiguration {
         // Wire tenant boundary validator into project assignment validator
         projectAssignmentValidator.setTenantBoundaryValidator(tenantBoundaryValidator);
 
-        return AuthorizationEvaluator.builder()
+        AuthorizationEvaluator.Builder builder = AuthorizationEvaluator.builder()
                 .permissionRegistry(permissionRegistry)
                 .rolePermissionMapping(rolePermissionMapping)
                 .roleResolver(roleResolver)
@@ -92,7 +95,12 @@ public class AuthorizationConfiguration {
                 .resourceStateValidator(resourceStateValidator)
                 .platformSupportValidator(platformSupportValidator)
                 .emergencyAccessValidator(emergencyAccessValidator)
-                .auditRecorder(auditRecorder)
-                .build();
+                .auditRecorder(auditRecorder);
+
+        if (customRolePermissionResolver != null) {
+            builder.customRolePermissionResolver(customRolePermissionResolver);
+        }
+
+        return builder.build();
     }
 }
