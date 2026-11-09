@@ -11,6 +11,15 @@
 >
 > **Persistence & Role Assignment Model (Stage 4):**
 > See [Stage 4 Persistence Architecture](STAGE-4-PERSISTENCE-ARCHITECTURE.md) for the database-backed canonical catalog, tenant constraints, and scoped role assignment lifecycle.
+>
+> **Application & Spring Security Integration (Stage 5):**
+> See [Stage 5 Application Integration](STAGE-5-APPLICATION-INTEGRATION.md) for Spring Security filters, method security, and SPI implementations.
+>
+> **JWT Optimization, Cache & Role Management (Stage 6):**
+> See [Stage 6 JWT, Cache & Role Management](STAGE-6-JWT-CACHE-ROLE-MANAGEMENT.md) for token claims schema, Redis authorization caching, and scoped role assignment REST APIs.
+>
+> **Custom Roles & Permission Governance (Stage 7):**
+> See [Stage 7 Custom Roles & Permission Governance](STAGE-7-CUSTOM-ROLES-GOVERNANCE.md) for tenant-scoped custom roles, canonical delegation boundary enforcement, and REST APIs.
 
 ---
 
@@ -370,9 +379,15 @@ PLATFORM_ADMIN
   REMOVED (Access immediately revoked; tokens invalidated)
 ```
 
-### 5.7 Custom Roles (Future)
+### 5.7 Custom Roles (Stage 7 Implementation)
 
-In a future release, `ORGANIZATION_OWNER` and `ORGANIZATION_ADMIN` principals will be able to define custom roles with specific permission subsets. Custom roles will be defined as a named collection of explicitly selected permissions from the platform's permission registry. They will not override the platform role hierarchy but will slot into the organization-level role space alongside the standard roles.
+Implemented in Stage 7 (see [Stage 7 Custom Roles & Permission Governance](STAGE-7-CUSTOM-ROLES-GOVERNANCE.md)). `ORGANIZATION_OWNER` and `ORGANIZATION_ADMIN` principals can define organization-scoped custom roles consisting of controlled subsets of canonical permissions from `PermissionRegistry`.
+
+Custom roles:
+- Are scoped strictly to a single organization tenant (`custom_roles`).
+- Enforce delegation boundaries ($P_{\text{custom}} \subseteq P_{\text{caller}}$).
+- Prohibit platform-scoped permissions (`platform.*`) and irreversible owner operations (`org.delete`).
+- Resolve additively through the central `AuthApi` pipeline alongside canonical roles.
 
 ---
 
