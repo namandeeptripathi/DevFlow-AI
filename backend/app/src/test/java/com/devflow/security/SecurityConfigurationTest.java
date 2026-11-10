@@ -107,6 +107,21 @@ class SecurityConfigurationTest {
     @MockBean
     private com.devflow.role.service.CustomRoleService customRoleService;
 
+    @MockBean
+    private com.devflow.audit.service.AuthorizationAuditService authorizationAuditService;
+
+    @MockBean
+    private com.devflow.audit.service.AuditIntegrityService auditIntegrityService;
+
+    @MockBean
+    private com.devflow.security.monitoring.service.SecurityMonitoringService securityMonitoringService;
+
+    @MockBean
+    private com.devflow.security.monitoring.service.SecurityAlertService securityAlertService;
+
+    @MockBean
+    private com.devflow.role.adapter.DatabaseRoleResolver databaseRoleResolver;
+
     // ── Public endpoint tests ─────────────────────────────────────────────────
 
     @Nested
