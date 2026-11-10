@@ -81,6 +81,13 @@ public class RoleAssignmentService {
     @Autowired(required = false)
     private PermissionGovernanceService permissionGovernanceService;
 
+    @Autowired(required = false)
+    private com.devflow.modules.auth.audit.AuthorizationAuditRecorder auditRecorder;
+
+    public void setAuditRecorder(com.devflow.modules.auth.audit.AuthorizationAuditRecorder auditRecorder) {
+        this.auditRecorder = auditRecorder;
+    }
+
     @Autowired
     public RoleAssignmentService(
             OrganizationRoleAssignmentRepository orgAssignmentRepository,
@@ -195,11 +202,37 @@ public class RoleAssignmentService {
         }
 
         if (role == Role.ORGANIZATION_BILLING && !isCallerOwner) {
+            if (auditRecorder != null) {
+                auditRecorder.record(com.devflow.modules.auth.audit.AuthorizationAuditEvent.builder()
+                        .eventType(com.devflow.modules.auth.audit.AuthorizationAuditEventType.PRIVILEGED_ROLE_GRANT_ATTEMPTED)
+                        .userId(assignedByUserId)
+                        .scope(com.devflow.modules.auth.domain.RoleScope.ORGANIZATION)
+                        .organizationId(organizationId)
+                        .targetId(targetUserId)
+                        .targetType("USER")
+                        .reason("Unauthorized attempt to grant privileged role ORGANIZATION_BILLING")
+                        .decision(com.devflow.modules.auth.api.AuthorizationDecision.deny(
+                                com.devflow.modules.auth.api.DenialReason.INSUFFICIENT_PERMISSIONS, "Only OWNER can grant BILLING"))
+                        .build());
+            }
             throw new RoleAssignmentAccessDeniedException(
                     "Only ORGANIZATION_OWNER can grant ORGANIZATION_BILLING role. User [" + assignedByUserId + "] is not an owner.");
         }
 
         if (role == Role.ORGANIZATION_OWNER && !isCallerOwner) {
+            if (auditRecorder != null) {
+                auditRecorder.record(com.devflow.modules.auth.audit.AuthorizationAuditEvent.builder()
+                        .eventType(com.devflow.modules.auth.audit.AuthorizationAuditEventType.PRIVILEGED_ROLE_GRANT_ATTEMPTED)
+                        .userId(assignedByUserId)
+                        .scope(com.devflow.modules.auth.domain.RoleScope.ORGANIZATION)
+                        .organizationId(organizationId)
+                        .targetId(targetUserId)
+                        .targetType("USER")
+                        .reason("Unauthorized attempt to grant privileged role ORGANIZATION_OWNER")
+                        .decision(com.devflow.modules.auth.api.AuthorizationDecision.deny(
+                                com.devflow.modules.auth.api.DenialReason.INSUFFICIENT_PERMISSIONS, "Only OWNER can grant OWNER"))
+                        .build());
+            }
             throw new RoleAssignmentAccessDeniedException(
                     "Only ORGANIZATION_OWNER can grant ORGANIZATION_OWNER role. User [" + assignedByUserId + "] is not an owner.");
         }
@@ -219,6 +252,19 @@ public class RoleAssignmentService {
         for (OrganizationRoleAssignment expired : expiredAssignments) {
             expired.revoke(assignedByUser, "EXPIRED_SUPERSEDED", now);
             orgAssignmentRepository.save(expired);
+            if (auditRecorder != null) {
+                auditRecorder.record(com.devflow.modules.auth.audit.AuthorizationAuditEvent.builder()
+                        .eventType(com.devflow.modules.auth.audit.AuthorizationAuditEventType.ROLE_ASSIGNMENT_SUPERSEDED)
+                        .userId(assignedByUserId)
+                        .scope(com.devflow.modules.auth.domain.RoleScope.ORGANIZATION)
+                        .organizationId(organizationId)
+                        .targetId(targetUserId)
+                        .targetType("USER")
+                        .previousState(role.name())
+                        .reason("EXPIRED_SUPERSEDED")
+                        .decision(com.devflow.modules.auth.api.AuthorizationDecision.allow())
+                        .build());
+            }
         }
 
         OrganizationRoleAssignment assignment = OrganizationRoleAssignment.builder()
@@ -234,6 +280,18 @@ public class RoleAssignmentService {
         OrganizationRoleAssignment saved = orgAssignmentRepository.save(assignment);
         if (cacheService != null) {
             cacheService.evictUser(organizationId, targetUserId);
+        }
+        if (auditRecorder != null) {
+            auditRecorder.record(com.devflow.modules.auth.audit.AuthorizationAuditEvent.builder()
+                    .eventType(com.devflow.modules.auth.audit.AuthorizationAuditEventType.ROLE_GRANTED)
+                    .userId(assignedByUserId)
+                    .scope(com.devflow.modules.auth.domain.RoleScope.ORGANIZATION)
+                    .organizationId(organizationId)
+                    .targetId(targetUserId)
+                    .targetType("USER")
+                    .newState(role.name())
+                    .decision(com.devflow.modules.auth.api.AuthorizationDecision.allow())
+                    .build());
         }
         log.info("Assigned role [{}] to user [{}] in organization [{}] by [{}]", role.name(), targetUserId, organizationId, assignedByUserId);
         return saved;
@@ -307,6 +365,19 @@ public class RoleAssignmentService {
         OrganizationRoleAssignment updated = orgAssignmentRepository.save(assignment);
         if (cacheService != null) {
             cacheService.evictUser(organizationId, targetUserId);
+        }
+        if (auditRecorder != null) {
+            auditRecorder.record(com.devflow.modules.auth.audit.AuthorizationAuditEvent.builder()
+                    .eventType(com.devflow.modules.auth.audit.AuthorizationAuditEventType.ROLE_REVOKED)
+                    .userId(revokedByUserId)
+                    .scope(com.devflow.modules.auth.domain.RoleScope.ORGANIZATION)
+                    .organizationId(organizationId)
+                    .targetId(targetUserId)
+                    .targetType("USER")
+                    .previousState(role.name())
+                    .reason(reason)
+                    .decision(com.devflow.modules.auth.api.AuthorizationDecision.allow())
+                    .build());
         }
         log.info("Revoked role [{}] from user [{}] in organization [{}] by [{}] (reason: {})", role.name(), targetUserId, organizationId, revokedByUserId, reason);
         return updated;
@@ -529,6 +600,18 @@ public class RoleAssignmentService {
         if (cacheService != null) {
             cacheService.evictUser(organizationId, targetUserId);
         }
+        if (auditRecorder != null) {
+            auditRecorder.record(com.devflow.modules.auth.audit.AuthorizationAuditEvent.builder()
+                    .eventType(com.devflow.modules.auth.audit.AuthorizationAuditEventType.ROLE_GRANTED)
+                    .userId(assignedByUserId)
+                    .scope(com.devflow.modules.auth.domain.RoleScope.ORGANIZATION)
+                    .organizationId(organizationId)
+                    .targetId(targetUserId)
+                    .targetType("USER")
+                    .newState(customRole.getName())
+                    .decision(com.devflow.modules.auth.api.AuthorizationDecision.allow())
+                    .build());
+        }
         log.info("Assigned custom role [{}] ({}) to user [{}] in organization [{}] by [{}]",
                 customRole.getName(), customRoleId, targetUserId, organizationId, assignedByUserId);
         return saved;
@@ -573,6 +656,19 @@ public class RoleAssignmentService {
         CustomRoleAssignment updated = customRoleAssignmentRepository.save(assignment);
         if (cacheService != null) {
             cacheService.evictUser(organizationId, assignment.getUser().getId());
+        }
+        if (auditRecorder != null) {
+            auditRecorder.record(com.devflow.modules.auth.audit.AuthorizationAuditEvent.builder()
+                    .eventType(com.devflow.modules.auth.audit.AuthorizationAuditEventType.ROLE_REVOKED)
+                    .userId(revokedByUserId)
+                    .scope(com.devflow.modules.auth.domain.RoleScope.ORGANIZATION)
+                    .organizationId(organizationId)
+                    .targetId(assignment.getUser().getId())
+                    .targetType("USER")
+                    .previousState(assignment.getCustomRole().getName())
+                    .reason(reason)
+                    .decision(com.devflow.modules.auth.api.AuthorizationDecision.allow())
+                    .build());
         }
         log.info("Revoked custom role assignment [{}] for user [{}] in organization [{}] by [{}]",
                 assignmentId, assignment.getUser().getId(), organizationId, revokedByUserId);
@@ -727,6 +823,19 @@ public class RoleAssignmentService {
         if (cacheService != null) {
             cacheService.evictUserProject(organizationId, projectId, targetUserId);
         }
+        if (auditRecorder != null) {
+            auditRecorder.record(com.devflow.modules.auth.audit.AuthorizationAuditEvent.builder()
+                    .eventType(com.devflow.modules.auth.audit.AuthorizationAuditEventType.ROLE_GRANTED)
+                    .userId(assignedByUserId)
+                    .scope(com.devflow.modules.auth.domain.RoleScope.PROJECT)
+                    .organizationId(organizationId)
+                    .projectId(projectId)
+                    .targetId(targetUserId)
+                    .targetType("USER")
+                    .newState(role.name())
+                    .decision(com.devflow.modules.auth.api.AuthorizationDecision.allow())
+                    .build());
+        }
         log.info("Assigned project role [{}] to user [{}] in project [{}] (org: [{}]) by [{}]",
                 role.name(), targetUserId, projectId, organizationId, assignedByUserId);
         return saved;
@@ -790,6 +899,20 @@ public class RoleAssignmentService {
         ProjectRoleAssignment updated = projectAssignmentRepository.save(assignment);
         if (cacheService != null) {
             cacheService.evictUserProject(organizationId, projectId, targetUserId);
+        }
+        if (auditRecorder != null) {
+            auditRecorder.record(com.devflow.modules.auth.audit.AuthorizationAuditEvent.builder()
+                    .eventType(com.devflow.modules.auth.audit.AuthorizationAuditEventType.ROLE_REVOKED)
+                    .userId(revokedByUserId)
+                    .scope(com.devflow.modules.auth.domain.RoleScope.PROJECT)
+                    .organizationId(organizationId)
+                    .projectId(projectId)
+                    .targetId(targetUserId)
+                    .targetType("USER")
+                    .previousState(role.name())
+                    .reason(reason)
+                    .decision(com.devflow.modules.auth.api.AuthorizationDecision.allow())
+                    .build());
         }
         log.info("Revoked project role [{}] from user [{}] in project [{}] by [{}] (reason: {})",
                 role.name(), targetUserId, projectId, revokedByUserId, reason);

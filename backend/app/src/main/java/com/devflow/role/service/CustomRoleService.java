@@ -56,6 +56,13 @@ public class CustomRoleService {
     private final DatabaseRoleResolver databaseRoleResolver;
     private final AuthorizationCacheService cacheService;
 
+    @Autowired(required = false)
+    private com.devflow.modules.auth.audit.AuthorizationAuditRecorder auditRecorder;
+
+    public void setAuditRecorder(com.devflow.modules.auth.audit.AuthorizationAuditRecorder auditRecorder) {
+        this.auditRecorder = auditRecorder;
+    }
+
     @Autowired
     public CustomRoleService(
             CustomRoleRepository customRoleRepository,
@@ -135,6 +142,33 @@ public class CustomRoleService {
         // 6. Cache invalidation
         if (cacheService != null) {
             cacheService.evictCustomRole(organizationId, savedRole.getId());
+        }
+
+        // 7. Security audit recording
+        if (auditRecorder != null) {
+            auditRecorder.record(com.devflow.modules.auth.audit.AuthorizationAuditEvent.builder()
+                    .eventType(com.devflow.modules.auth.audit.AuthorizationAuditEventType.CUSTOM_ROLE_CREATED)
+                    .userId(callerUserId)
+                    .scope(com.devflow.modules.auth.domain.RoleScope.ORGANIZATION)
+                    .organizationId(organizationId)
+                    .targetId(savedRole.getId())
+                    .targetType("CUSTOM_ROLE")
+                    .newState(savedRole.getName())
+                    .decision(com.devflow.modules.auth.api.AuthorizationDecision.allow())
+                    .build());
+
+            for (PermissionEntity permEntity : permissionEntities) {
+                auditRecorder.record(com.devflow.modules.auth.audit.AuthorizationAuditEvent.builder()
+                        .eventType(com.devflow.modules.auth.audit.AuthorizationAuditEventType.CUSTOM_ROLE_PERMISSION_ADDED)
+                        .userId(callerUserId)
+                        .scope(com.devflow.modules.auth.domain.RoleScope.ORGANIZATION)
+                        .organizationId(organizationId)
+                        .targetId(savedRole.getId())
+                        .targetType("CUSTOM_ROLE")
+                        .newState(permEntity.getName())
+                        .decision(com.devflow.modules.auth.api.AuthorizationDecision.allow())
+                        .build());
+            }
         }
 
         log.info("Created custom role [{}] ({}) in organization [{}] by [{}]",
@@ -251,6 +285,32 @@ public class CustomRoleService {
             cacheService.evictCustomRole(organizationId, roleId);
         }
 
+        if (auditRecorder != null) {
+            auditRecorder.record(com.devflow.modules.auth.audit.AuthorizationAuditEvent.builder()
+                    .eventType(com.devflow.modules.auth.audit.AuthorizationAuditEventType.CUSTOM_ROLE_UPDATED)
+                    .userId(callerUserId)
+                    .scope(com.devflow.modules.auth.domain.RoleScope.ORGANIZATION)
+                    .organizationId(organizationId)
+                    .targetId(roleId)
+                    .targetType("CUSTOM_ROLE")
+                    .newState(updated.getName())
+                    .decision(com.devflow.modules.auth.api.AuthorizationDecision.allow())
+                    .build());
+
+            if (request.getActive() != null && !request.getActive()) {
+                auditRecorder.record(com.devflow.modules.auth.audit.AuthorizationAuditEvent.builder()
+                        .eventType(com.devflow.modules.auth.audit.AuthorizationAuditEventType.CUSTOM_ROLE_DISABLED)
+                        .userId(callerUserId)
+                        .scope(com.devflow.modules.auth.domain.RoleScope.ORGANIZATION)
+                        .organizationId(organizationId)
+                        .targetId(roleId)
+                        .targetType("CUSTOM_ROLE")
+                        .reason("Custom role deactivated via update")
+                        .decision(com.devflow.modules.auth.api.AuthorizationDecision.allow())
+                        .build());
+            }
+        }
+
         log.info("Updated custom role [{}] ({}) in organization [{}] by [{}]",
                 updated.getName(), roleId, organizationId, callerUserId);
 
@@ -293,11 +353,35 @@ public class CustomRoleService {
             // Safely deactivate / archive to preserve historical assignment audit records
             role.setActive(false);
             customRoleRepository.save(role);
+            if (auditRecorder != null) {
+                auditRecorder.record(com.devflow.modules.auth.audit.AuthorizationAuditEvent.builder()
+                        .eventType(com.devflow.modules.auth.audit.AuthorizationAuditEventType.CUSTOM_ROLE_DISABLED)
+                        .userId(callerUserId)
+                        .scope(com.devflow.modules.auth.domain.RoleScope.ORGANIZATION)
+                        .organizationId(organizationId)
+                        .targetId(roleId)
+                        .targetType("CUSTOM_ROLE")
+                        .reason("Archived custom role with historical assignments")
+                        .decision(com.devflow.modules.auth.api.AuthorizationDecision.allow())
+                        .build());
+            }
             log.info("Safely deactivated custom role [{}] ({}) in organization [{}] to preserve historical assignment data",
                     role.getName(), roleId, organizationId);
         } else {
             // Safe to hard delete because no historical references exist
             customRoleRepository.delete(role);
+            if (auditRecorder != null) {
+                auditRecorder.record(com.devflow.modules.auth.audit.AuthorizationAuditEvent.builder()
+                        .eventType(com.devflow.modules.auth.audit.AuthorizationAuditEventType.CUSTOM_ROLE_DELETED)
+                        .userId(callerUserId)
+                        .scope(com.devflow.modules.auth.domain.RoleScope.ORGANIZATION)
+                        .organizationId(organizationId)
+                        .targetId(roleId)
+                        .targetType("CUSTOM_ROLE")
+                        .reason("Permanently deleted unused custom role")
+                        .decision(com.devflow.modules.auth.api.AuthorizationDecision.allow())
+                        .build());
+            }
             log.info("Deleted unused custom role [{}] ({}) in organization [{}]",
                     role.getName(), roleId, organizationId);
         }

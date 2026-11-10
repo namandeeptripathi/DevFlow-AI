@@ -65,6 +65,13 @@ public class OrganizationMembershipService {
     private final TeamMemberRepository teamMemberRepository;
     private AuthorizationCacheService cacheService;
 
+    @Autowired(required = false)
+    private com.devflow.modules.auth.audit.AuthorizationAuditRecorder auditRecorder;
+
+    public void setAuditRecorder(com.devflow.modules.auth.audit.AuthorizationAuditRecorder auditRecorder) {
+        this.auditRecorder = auditRecorder;
+    }
+
     @Autowired
     public OrganizationMembershipService(
             OrganizationMemberRepository organizationMemberRepository,
@@ -217,6 +224,18 @@ public class OrganizationMembershipService {
         if (cacheService != null) {
             cacheService.evictUser(organizationId, targetUserId);
         }
+        if (auditRecorder != null) {
+            auditRecorder.record(com.devflow.modules.auth.audit.AuthorizationAuditEvent.builder()
+                    .eventType(com.devflow.modules.auth.audit.AuthorizationAuditEventType.MEMBERSHIP_REMOVED)
+                    .userId(callerUserId)
+                    .scope(com.devflow.modules.auth.domain.RoleScope.ORGANIZATION)
+                    .organizationId(organizationId)
+                    .targetId(targetUserId)
+                    .targetType("USER")
+                    .previousState(member.getRole() != null ? member.getRole().name() : null)
+                    .decision(com.devflow.modules.auth.api.AuthorizationDecision.allow())
+                    .build());
+        }
         log.info("Removed user [{}] from organization [{}] by caller [{}]", targetUserId, organizationId, callerUserId);
     }
 
@@ -264,10 +283,24 @@ public class OrganizationMembershipService {
             }
         }
 
+        OrganizationRole oldRole = member.getRole();
         member.setRole(newRole);
         OrganizationMember updated = organizationMemberRepository.save(member);
         if (cacheService != null) {
             cacheService.evictUser(organizationId, targetUserId);
+        }
+        if (auditRecorder != null) {
+            auditRecorder.record(com.devflow.modules.auth.audit.AuthorizationAuditEvent.builder()
+                    .eventType(com.devflow.modules.auth.audit.AuthorizationAuditEventType.MEMBERSHIP_ROLE_CHANGED)
+                    .userId(callerUserId)
+                    .scope(com.devflow.modules.auth.domain.RoleScope.ORGANIZATION)
+                    .organizationId(organizationId)
+                    .targetId(targetUserId)
+                    .targetType("USER")
+                    .previousState(oldRole != null ? oldRole.name() : null)
+                    .newState(newRole.name())
+                    .decision(com.devflow.modules.auth.api.AuthorizationDecision.allow())
+                    .build());
         }
         log.info("Changed role for user [{}] in organization [{}] to [{}] by caller [{}]", targetUserId, organizationId, newRole, callerUserId);
         return updated;

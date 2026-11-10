@@ -1,5 +1,6 @@
 package com.devflow.audit;
 
+import com.devflow.audit.service.AuthorizationAuditService;
 import com.devflow.modules.auth.audit.AuthorizationAuditEvent;
 import com.devflow.modules.auth.audit.AuthorizationAuditRecorder;
 import org.slf4j.Logger;
@@ -11,18 +12,19 @@ import org.springframework.stereotype.Component;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
-import java.util.Objects;
 
 /**
  * Production implementation of {@link AuthorizationAuditRecorder} from {@code devflow-auth}.
  *
- * <p>Emits structured logs for all authorization events (ALLOW and DENY) and optionally publishes
- * {@link AuthorizationAuditApplicationEvent} for asynchronous consumption.
+ * <p>Emits structured logs for all authorization events (ALLOW and DENY), persists audit events
+ * into the tamper-evident PostgreSQL ledger via {@link AuthorizationAuditService}, and publishes
+ * {@link AuthorizationAuditApplicationEvent} for asynchronous security monitoring and detection consumption.
  *
  * <p>Maintains an in-memory buffer of recent events for inspection and integration testing.
  *
  * @see AuthorizationAuditRecorder
  * @see AuthorizationAuditEvent
+ * @see AuthorizationAuditService
  */
 @Component
 public class LoggingAuthorizationAuditRecorder implements AuthorizationAuditRecorder {
@@ -30,11 +32,20 @@ public class LoggingAuthorizationAuditRecorder implements AuthorizationAuditReco
     private static final Logger log = LoggerFactory.getLogger(LoggingAuthorizationAuditRecorder.class);
 
     private final ApplicationEventPublisher eventPublisher;
+    private final AuthorizationAuditService auditService;
     private final List<AuthorizationAuditEvent> recordedEvents = Collections.synchronizedList(new ArrayList<>());
 
-    @Autowired
     public LoggingAuthorizationAuditRecorder(@Autowired(required = false) ApplicationEventPublisher eventPublisher) {
+        this(eventPublisher, null);
+    }
+
+    @Autowired
+    public LoggingAuthorizationAuditRecorder(
+            @Autowired(required = false) ApplicationEventPublisher eventPublisher,
+            @Autowired(required = false) AuthorizationAuditService auditService
+    ) {
         this.eventPublisher = eventPublisher;
+        this.auditService = auditService;
     }
 
     @Override
@@ -45,8 +56,19 @@ public class LoggingAuthorizationAuditRecorder implements AuthorizationAuditReco
 
         recordedEvents.add(event);
 
+        if (auditService != null) {
+            try {
+                auditService.persistAuditEvent(event);
+            } catch (IllegalStateException e) {
+                // Administrative operations must not succeed if durable audit fails
+                throw e;
+            } catch (Exception e) {
+                log.warn("Failed to persist audit event [{}]: {}", event.eventId(), e.getMessage());
+            }
+        }
+
         if (event.decision().allowed()) {
-            log.info("AUDIT_AUTHZ_ALLOW: eventId=[{}] type=[{}] user=[{}] scope=[{}] org=[{}] project=[{}] resource=[{}:{}] permissions={}",
+            log.info("AUDIT_AUTHZ_ALLOW: eventId=[{}] type=[{}] user=[{}] scope=[{}] org=[{}] project=[{}] resource=[{}:{}] permissions={} target=[{}:{}]",
                     event.eventId(),
                     event.eventType(),
                     event.userId(),
@@ -55,9 +77,11 @@ public class LoggingAuthorizationAuditRecorder implements AuthorizationAuditReco
                     event.projectId(),
                     event.resourceType(),
                     event.resourceId(),
-                    event.requestedPermissions());
+                    event.requestedPermissions(),
+                    event.targetType(),
+                    event.targetId());
         } else {
-            log.warn("AUDIT_AUTHZ_DENY: eventId=[{}] type=[{}] user=[{}] scope=[{}] org=[{}] project=[{}] resource=[{}:{}] permissions={} reason=[{}] message=[{}]",
+            log.warn("AUDIT_AUTHZ_DENY: eventId=[{}] type=[{}] user=[{}] scope=[{}] org=[{}] project=[{}] resource=[{}:{}] permissions={} reason=[{}] message=[{}] target=[{}:{}]",
                     event.eventId(),
                     event.eventType(),
                     event.userId(),
@@ -68,7 +92,9 @@ public class LoggingAuthorizationAuditRecorder implements AuthorizationAuditReco
                     event.resourceId(),
                     event.requestedPermissions(),
                     event.denialReason(),
-                    event.decision().message());
+                    event.decision().message(),
+                    event.targetType(),
+                    event.targetId());
         }
 
         if (eventPublisher != null) {

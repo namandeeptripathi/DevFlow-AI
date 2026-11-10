@@ -50,6 +50,13 @@ public class PermissionGovernanceService {
     private final DatabaseRoleResolver databaseRoleResolver;
     private final CustomRoleAssignmentRepository customRoleAssignmentRepository;
 
+    @Autowired(required = false)
+    private com.devflow.modules.auth.audit.AuthorizationAuditRecorder auditRecorder;
+
+    public void setAuditRecorder(com.devflow.modules.auth.audit.AuthorizationAuditRecorder auditRecorder) {
+        this.auditRecorder = auditRecorder;
+    }
+
     @Autowired
     public PermissionGovernanceService(
             PermissionRegistry permissionRegistry,
@@ -171,6 +178,18 @@ public class PermissionGovernanceService {
         // 3. Verify that every requested permission is held by caller
         for (Permission requested : targetPermissions) {
             if (!callerEffectivePermissions.contains(requested)) {
+                if (auditRecorder != null) {
+                    auditRecorder.record(com.devflow.modules.auth.audit.AuthorizationAuditEvent.builder()
+                            .eventType(com.devflow.modules.auth.audit.AuthorizationAuditEventType.PERMISSION_DELEGATION_VIOLATION_ATTEMPTED)
+                            .userId(callerUserId)
+                            .scope(RoleScope.ORGANIZATION)
+                            .organizationId(organizationId)
+                            .reason("User lacks permission to delegate [" + requested.value() + "]")
+                            .decision(com.devflow.modules.auth.api.AuthorizationDecision.deny(
+                                    com.devflow.modules.auth.api.DenialReason.INSUFFICIENT_PERMISSIONS,
+                                    "Delegation authority missing for " + requested.value()))
+                            .build());
+                }
                 throw new CustomRoleAccessDeniedException(
                         "User [" + callerUserId + "] lacks permission to delegate [" + requested.value() + "] in organization [" + organizationId + "]"
                 );
