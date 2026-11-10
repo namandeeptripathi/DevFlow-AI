@@ -20,6 +20,9 @@
 >
 > **Custom Roles & Permission Governance (Stage 7):**
 > See [Stage 7 Custom Roles & Permission Governance](STAGE-7-CUSTOM-ROLES-GOVERNANCE.md) for tenant-scoped custom roles, canonical delegation boundary enforcement, and REST APIs.
+>
+> **Authorization Audit & Security Monitoring (Stage 8):**
+> See [Stage 8 Audit & Security Monitoring](STAGE-8-AUDIT-SECURITY-MONITORING.md) for centralized persistent audit recording, cryptographic hash-chain tamper-evidence, automated suspicious activity detection, and alert management APIs.
 
 ---
 
@@ -920,10 +923,15 @@ Every authorization decision — both grants and denials — is a security-relev
 
 ### 13.2 Audit Log Properties
 
-- **Write-once:** Audit log entries are written as immutable append-only records.
+- **Write-once:** Audit log entries are written as immutable append-only records enforced by PostgreSQL database triggers (`trg_prevent_audit_log_update_delete`).
+- **Tamper-evident:** Audit logs are linked via a cryptographic SHA-256 hash-chain and sealed with HMAC-SHA256 checkpoints (`AuditIntegrityService`).
+- **Security Monitoring & Threat Detection:** An explainable deterministic detection engine processes authorization events in real-time, detecting denial spikes, cross-tenant violations, scope escapes, and unauthorized role grants (`SecurityMonitoringService`).
 - **Tamper-resistant:** Audit logs are shipped to the centralized observability stack (Grafana Loki) in real-time. Even if the primary database record were modified, the shipped log remains unaltered.
 - **Retention:** Audit logs are retained for a minimum of 2 years, configurable per organization for compliance requirements.
 - **Queryability:** Audit logs are indexed by `userId`, `orgId`, `resourceId`, and `timestamp`, enabling compliance teams to answer questions like "Who changed this permission and when?" without scanning the full log.
+
+> [!NOTE]
+> **Stage 8 Implementation:** Full architecture, hash-chain specifications, database triggers, detection rules catalog, and tenant-scoped security APIs (`/api/v1/organizations/{organizationId}/security/...`) are documented in [Stage 8 Audit & Security Monitoring Specification](STAGE-8-AUDIT-SECURITY-MONITORING.md).
 
 ---
 
