@@ -29,6 +29,11 @@ import com.devflow.role.exception.RoleAssignmentAccessDeniedException;
 import com.devflow.role.exception.RoleAssignmentAlreadyExistsException;
 import com.devflow.role.exception.RoleAssignmentException;
 import com.devflow.role.exception.RoleAssignmentNotFoundException;
+import com.devflow.security.monitoring.exception.AuditLogNotFoundException;
+import com.devflow.security.monitoring.exception.InvalidSecurityOperationException;
+import com.devflow.security.monitoring.exception.SecurityAlertNotFoundException;
+import com.devflow.security.monitoring.exception.SecurityEventNotFoundException;
+import com.devflow.security.monitoring.exception.SecurityMonitoringAccessDeniedException;
 import com.devflow.team.exception.InvalidTeamOperationException;
 import com.devflow.team.exception.TeamAccessDeniedException;
 import com.devflow.team.exception.TeamAlreadyExistsException;
@@ -525,6 +530,37 @@ public class GlobalExceptionHandler {
             HttpServletRequest request
     ) {
         log.warn("Team domain error: {}", ex.getMessage());
+        return buildErrorResponse(HttpStatus.BAD_REQUEST, "Bad Request", ex.getMessage(), request.getRequestURI());
+    }
+
+    @ExceptionHandler({
+            AuditLogNotFoundException.class,
+            SecurityAlertNotFoundException.class,
+            SecurityEventNotFoundException.class
+    })
+    public ResponseEntity<Map<String, Object>> handleSecurityResourceNotFound(
+            RuntimeException ex,
+            HttpServletRequest request
+    ) {
+        log.warn("Security resource not found on [{}]: {}", request.getRequestURI(), ex.getMessage());
+        return buildErrorResponse(HttpStatus.NOT_FOUND, "Not Found", ex.getMessage(), request.getRequestURI());
+    }
+
+    @ExceptionHandler(SecurityMonitoringAccessDeniedException.class)
+    public ResponseEntity<Map<String, Object>> handleSecurityMonitoringAccessDenied(
+            SecurityMonitoringAccessDeniedException ex,
+            HttpServletRequest request
+    ) {
+        log.warn("Security monitoring access denied on [{}]: {}", request.getRequestURI(), ex.getMessage());
+        return buildErrorResponse(HttpStatus.FORBIDDEN, "Forbidden", ex.getMessage(), request.getRequestURI());
+    }
+
+    @ExceptionHandler(InvalidSecurityOperationException.class)
+    public ResponseEntity<Map<String, Object>> handleInvalidSecurityOperation(
+            InvalidSecurityOperationException ex,
+            HttpServletRequest request
+    ) {
+        log.warn("Invalid security operation on [{}]: {}", request.getRequestURI(), ex.getMessage());
         return buildErrorResponse(HttpStatus.BAD_REQUEST, "Bad Request", ex.getMessage(), request.getRequestURI());
     }
 
