@@ -498,6 +498,22 @@ public class AuthorizationEvaluator implements AuthApi {
             AuthorizationDecision decision,
             DenialReason denialReason
     ) {
+        recordAudit(eventType, userId, scope, organizationId, projectId, resourceType, resourceId, permissions, decision, denialReason, null);
+    }
+
+    private void recordAudit(
+            AuthorizationAuditEventType eventType,
+            UUID userId,
+            RoleScope scope,
+            UUID organizationId,
+            UUID projectId,
+            String resourceType,
+            String resourceId,
+            Set<Permission> permissions,
+            AuthorizationDecision decision,
+            DenialReason denialReason,
+            String correlationId
+    ) {
         try {
             AuthorizationAuditEvent event = new AuthorizationAuditEvent(
                     UUID.randomUUID(),
@@ -511,7 +527,13 @@ public class AuthorizationEvaluator implements AuthApi {
                     resourceId,
                     permissions,
                     decision,
-                    denialReason
+                    denialReason,
+                    correlationId,
+                    null,
+                    null,
+                    null,
+                    null,
+                    null
             );
             auditRecorder.record(event);
         } catch (Exception ignored) {

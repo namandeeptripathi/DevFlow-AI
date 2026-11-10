@@ -71,6 +71,104 @@ public enum AuthorizationAuditEventType {
     /**
      * Organization member denied project access due to absence of project role or assignment.
      */
-    PROJECT_ASSIGNMENT_DENIAL
+    PROJECT_ASSIGNMENT_DENIAL,
+
+    // ── Canonical Role Lifecycle Events (§13, Stage 8) ────────────────────────
+
+    /**
+     * Canonical role assigned to a principal within an organization or project scope.
+     */
+    ROLE_GRANTED,
+
+    /**
+     * Canonical role revoked from a principal.
+     */
+    ROLE_REVOKED,
+
+    /**
+     * Time-bounded role assignment expired.
+     */
+    ROLE_ASSIGNMENT_EXPIRED,
+
+    /**
+     * Role assignment superseded by a new assignment.
+     */
+    ROLE_ASSIGNMENT_SUPERSEDED,
+
+    /**
+     * Role assignment rejected due to policy or governance violation.
+     */
+    ROLE_ASSIGNMENT_REJECTED,
+
+    // ── Custom Role Lifecycle Events (§13, Stage 8) ───────────────────────────
+
+    /**
+     * Custom role created within an organization.
+     */
+    CUSTOM_ROLE_CREATED,
+
+    /**
+     * Custom role metadata or settings updated.
+     */
+    CUSTOM_ROLE_UPDATED,
+
+    /**
+     * Custom role deactivated/disabled.
+     */
+    CUSTOM_ROLE_DISABLED,
+
+    /**
+     * Custom role archived or permanently deleted.
+     */
+    CUSTOM_ROLE_DELETED,
+
+    /**
+     * Permission attached to a custom role.
+     */
+    CUSTOM_ROLE_PERMISSION_ADDED,
+
+    /**
+     * Permission detached from a custom role.
+     */
+    CUSTOM_ROLE_PERMISSION_REMOVED,
+
+    // ── Membership & Governance Events (§13, Stage 8) ─────────────────────────
+
+    /**
+     * Organization membership role elevated or demoted.
+     */
+    MEMBERSHIP_ROLE_CHANGED,
+
+    /**
+     * Member removed from organization tenant.
+     */
+    MEMBERSHIP_REMOVED,
+
+    /**
+     * Unauthorized attempt to assign privileged role (e.g. OWNER or BILLING).
+     */
+    PRIVILEGED_ROLE_GRANT_ATTEMPTED,
+
+    /**
+     * Unauthorized attempt to delegate permissions the actor does not possess.
+     */
+    PERMISSION_DELEGATION_VIOLATION_ATTEMPTED,
+
+    // ── Security Monitoring & Audit Governance Events (Stage 8) ───────────────
+
+    /**
+     * Security alert acknowledged by an administrator.
+     */
+    SECURITY_ALERT_ACKNOWLEDGED,
+
+    /**
+     * Security alert resolved by an administrator.
+     */
+    SECURITY_ALERT_RESOLVED,
+
+    /**
+     * Cryptographic audit integrity verification executed over a tenant scope.
+     */
+    AUDIT_INTEGRITY_VERIFIED
 }
 
