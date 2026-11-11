@@ -1,7 +1,7 @@
 # Stage 9: Final Hardening & Production Readiness
 
-> **Status:** Complete — Validated & Hardened (Stage 9 Final Assessment)  
-> **Date:** 2026-11-11  
+> **Status:** Complete — Live Infrastructure Validated & Closed (Stage 9 Final Assessment)\
+> **Date:** 2026-11-12\
 > **Author:** DevFlow Core Security & Platform Engineering  
 > **Applies to:** `backend/app`, `backend/devflow-auth`, Flyway `V1`–`V16`, production configuration  
 > **Policy Source of Truth:** [AUTHORIZATION_MODEL.md](AUTHORIZATION_MODEL.md) (unmodified) & [ADR-001](ADR-001-AUTHORIZATION-POLICY-RESOLUTION.md)  
@@ -11,7 +11,7 @@
 
 ## 1. Executive Summary
 
-Stage 9 conducted a comprehensive production-readiness audit across DevFlow's centralized authorization system (`backend/devflow-auth` and `backend/app`), validating Areas **A–H**:
+Stage 9 conducted a comprehensive production-readiness audit and live infrastructure closure across DevFlow's centralized authorization system (`backend/devflow-auth` and `backend/app`), validating Areas **A–H** against real **PostgreSQL 17.11** and live **Redis 8.10.3**:
 
 - **A. End-to-End Authorization Testing**
 - **B. Multi-Tenant Isolation & Anti-Enumeration**
@@ -22,9 +22,9 @@ Stage 9 conducted a comprehensive production-readiness audit across DevFlow's ce
 - **G. Performance & Load Benchmarking**
 - **H. Production Configuration & Deployment Readiness**
 
-No architectural redesigns or changes to `docs/security/AUTHORIZATION_MODEL.md` were introduced. Every defect uncovered during validation was fixed cleanly with targeted hardening and regression tests.
+No architectural redesigns or changes to `docs/security/AUTHORIZATION_MODEL.md` or historical migrations `V1`–`V15` were introduced. Every defect uncovered during code hardening and live-infrastructure validation (including `@Transactional` rollback loss of security-violation audits in `RoleAssignmentService` / `CustomRoleService`) was fixed cleanly with targeted hardening and regression tests.
 
-**Overall Readiness Verdict:** Ready for staging/production deployment once production environment secrets and managed PostgreSQL 17 + TLS Redis endpoints are provisioned, with one explicitly noted test-environment constraint (`PARTIAL` on live Redis daemon benchmarking; Redis failover, recovery replay, and cursor `SCAN` were verified against mocked `StringRedisTemplate` plus live connection-refused fallback paths).
+**Overall Readiness Verdict:** Ready for staging/production deployment once managed production infrastructure (PostgreSQL 17, TLS-enabled Redis Cluster/Sentinel, TLS reverse proxy, and injected runtime secrets) is provisioned. All Areas **A–H** now **PASS** against live local PostgreSQL 17.11 and standalone Redis 8.10.3 (noting that multi-node HA failover and Redis TLS transport remain to be validated in the staging/production environment itself).
 
 ---
 
@@ -32,14 +32,14 @@ No architectural redesigns or changes to `docs/security/AUTHORIZATION_MODEL.md` 
 
 | Area | Domain | Status | Evidence & Notes |
 | :--- | :--- | :--- | :--- |
-| **A** | End-to-End Authorization | **PASS** | Validated JWT auth separation, refresh token rejection on API endpoints, header spoofing resistance (`X-User-Id`, `X-Roles`, `X-Organization-Id`), canonical roles (10), custom roles (48 permissions), ownership (`TeamRole.LEAD`), org-to-project inheritance, composite AND semantics, expired assignments, and default-deny (`Stage9SecurityAndIsolationIntegrationTest`). |
-| **B** | Multi-Tenant Isolation & Security | **PASS** | Verified uniform `403 Forbidden` (never `404`) for unauthorized cross-tenant `custom-roles` probes, `MEMBERSHIP_INACTIVE` evaluation before project boundary checks in `AuthorizationEvaluator`, monitoring controller pagination bounds & denial auditing (`OrganizationSecurityMonitoringController`). |
-| **C** | Concurrency & Race Conditions | **PASS** | Verified under concurrent executors against PostgreSQL: `PESSIMISTIC_WRITE` (`OrganizationRepository.findByIdForUpdate`) serializes simultaneous owner removals & owner role revocations so sole active owner invariant always holds; PostgreSQL advisory locks (`pg_advisory_xact_lock`) serialize monotonic audit sequences and alert deduplication (`Stage9ConcurrencyAndAuditIntegrityIntegrationTest`). |
-| **D** | Authorization Cache & Redis Reliability | **PARTIAL** | All hardening & recovery logic verified (`RedisAuthorizationCacheHardeningTest`, `Stage9SecurityAndIsolationIntegrationTest`), including `SCAN` cursor eviction, bounded L1 cache, after-commit re-eviction, invitee cache eviction (`OrganizationInvitationService.acceptInvitation`), no stale local reads when Redis is healthy, and outage eviction replay on recovery. **Constraint:** Standalone Redis daemon at `localhost:6370` was offline in the test environment, so live networked Redis socket throughput was not benchmarked directly. |
-| **E** | Audit Integrity & Monitoring Reliability | **PASS** | Verified gapless concurrent hash chaining, idempotent `eventId` retries, PostgreSQL append-only triggers blocking `UPDATE`/`DELETE` on `authorization_audit_events` and `audit_integrity_checkpoints`, genesis/wipe/tail-truncation/rewrite detection, constant-time HMAC verification, sanitized `X-Request-ID`, and PostgreSQL-safe Criteria/split queries for audit & security monitoring (`Stage9ConcurrencyAndAuditIntegrityIntegrationTest`). |
-| **F** | Database Migration & Recovery | **PASS** | Validated clean Flyway schema history `V1`–`V16` on PostgreSQL 17 (`failed = 0`), canonical seed parity (10 roles / 48 permissions), and new unique partial sequence/checkpoint indexes (`V16__harden_audit_and_concurrency_constraints.sql`). Pre-existing migrations `V1`–`V15` were left untouched. |
-| **G** | Performance & Load Testing | **PASS** | Measured pure in-process evaluator throughput (117k–166k ops/s, <0.01 ms mean) and durable PostgreSQL hash-chained audit writes (~336 ops/s, ~2.98 ms mean) via `Stage9AuthorizationBenchmarkTest`. See Section 4 for full caveat and latency breakdown. |
-| **H** | Production Deployment Readiness | **PASS** | Added fail-fast `@PostConstruct` startup validator (`ConfigurationValidator`, 7/7 tests), disabled in-memory audit buffer in `prod` (`in-memory-buffer-size: 0`), enforced strict issuer & token type JWT checks, and verified `bootJar` packaging (`devflow-backend-0.0.1-SNAPSHOT.jar`). |
+| **A** | End-to-End Authorization | **PASS** | Validated JWT auth separation, refresh token rejection on API endpoints, header spoofing resistance (`X-User-Id`, `X-Roles`, `X-Organization-Id`), canonical roles (10), custom roles (48 permissions), ownership (`TeamRole.LEAD`), org-to-project inheritance, composite AND semantics, expired assignments, and default-deny (`Stage9SecurityAndIsolationIntegrationTest`, plus live HTTP `RANDOM_PORT` verification in `Stage9EndToEndLiveSmokeIntegrationTest`). |
+| **B** | Multi-Tenant Isolation & Security | **PASS** | Verified uniform `403 Forbidden` (never `404`) for unauthorized cross-tenant `custom-roles` probes, `MEMBERSHIP_INACTIVE` evaluation before project boundary checks in `AuthorizationEvaluator`, monitoring controller pagination bounds & denial auditing (`OrganizationSecurityMonitoringController`), and live cross-tenant anti-enumeration over HTTP (`Stage9EndToEndLiveSmokeIntegrationTest`). |
+| **C** | Concurrency & Race Conditions | **PASS** | Verified under concurrent executors against PostgreSQL 17.11: `PESSIMISTIC_WRITE` (`OrganizationRepository.findByIdForUpdate`) serializes simultaneous owner removals & concurrent org role grant/revoke races (`concurrentRoleGrantAndRevokeMaintainConsistentState`); PostgreSQL advisory locks (`pg_advisory_xact_lock`) serialize monotonic audit sequences and alert deduplication; transaction rollbacks preserve prior hash-chain continuity without orphaned state (`Stage9ConcurrencyAndAuditIntegrityIntegrationTest`). |
+| **D** | Authorization Cache & Redis Reliability | **PASS** | Verified all 15 live-Redis scenarios against real Redis 8.10.3 (`LiveRedisAuthorizationCacheIntegrationTest`, `LiveRedisOutageRecoveryIntegrationTest`, and unit suite `RedisAuthorizationCacheHardeningTest`): cache miss/population/hit, TTL expiry (`1s`), org grant/revoke & project revoke invalidation, custom-role permission update invalidation, membership removal clearing `roles:org`/`roles:proj`/`member`/`perms:custom:org`, tenant key isolation, cursor `SCAN` over `1,250` keys preserving sibling tenants, 6-thread concurrent read/invalidation stability, Redis outage (`SHUTDOWN NOSAVE`) fallback & stale RDB recovery eviction replay, and healthy Redis misses bypassing stale `localCache`. |
+| **E** | Audit Integrity & Monitoring Reliability | **PASS** | Verified gapless concurrent hash chaining, idempotent `eventId` retries, PostgreSQL append-only triggers blocking `UPDATE`/`DELETE` on `authorization_audit_events` and `audit_integrity_checkpoints`, genesis/wipe/tail-truncation/rewrite detection, constant-time HMAC verification, sanitized `X-Request-ID`, PostgreSQL-safe Criteria/split queries, and `noRollbackFor` retention of denied escalation/delegation audit events & alert lifecycle (`Stage9ConcurrencyAndAuditIntegrityIntegrationTest`, `Stage9EndToEndLiveSmokeIntegrationTest`). |
+| **F** | Database Migration & Recovery | **PASS** | Validated clean Flyway `V1`–`V16` installation and existing populated `V1`–`V15 -> V16` upgrade on isolated PostgreSQL 17.11 databases (`failed = 0`), service restart & recovery (`postgresql@17`), canonical seed parity (10 roles / 48 permissions), and partial unique constraints (`V16__harden_audit_and_concurrency_constraints.sql`) while keeping `V1`–`V15` unmodified. |
+| **G** | Performance & Load Testing | **PASS** | Measured pure in-process evaluator throughput (68k–196k ops/s, <= 0.015 ms mean), full `AuthApi` with live Redis 8.10.3 + membership + synchronous audit persistence (~112–193 ops/s, ~5.18–8.93 ms mean), and durable PostgreSQL hash-chained audit writes (~365 ops/s, ~2.74 ms mean) via `Stage9AuthorizationBenchmarkTest`. See Section 4 for full metrics. |
+| **H** | Production Deployment Readiness | **PASS** | Added fail-fast `@PostConstruct` startup validator (`ConfigurationValidator`, 9/9 tests including live `ApplicationContextRunner` verification of `application-prod.yml` bindings), disabled in-memory audit buffer in `prod` (`in-memory-buffer-size: 0`), enabled `spring.data.redis.ssl.enabled: true` in `prod`, enforced strict issuer & token type JWT checks, and verified `bootJar` packaging (`devflow-backend-0.0.1-SNAPSHOT.jar`, `73M`). |
 
 ---
 
@@ -97,46 +97,69 @@ No architectural redesigns or changes to `docs/security/AUTHORIZATION_MODEL.md` 
   - Created [`ConfigurationValidator.java`](../../backend/app/src/main/java/com/devflow/config/ConfigurationValidator.java) (`@PostConstruct` validation across all profiles + strict `prod` enforcement).
   - Bounded [`LoggingAuthorizationAuditRecorder.java`](../../backend/app/src/main/java/com/devflow/audit/LoggingAuthorizationAuditRecorder.java) via `devflow.security.audit.in-memory-buffer-size` (default `1000` in [`application.yml`](../../backend/app/src/main/resources/application.yml), `0` in [`application-prod.yml`](../../backend/app/src/main/resources/application-prod.yml)).
 
+### 3.8 Transactional Rollback Losing Security-Violation Audits & Partial Custom-Role Metadata Mutation
+- **Finding (uncovered during live E2E HTTP validation):** Security denial paths inside `@Transactional` methods (`assignOrganizationRole` and `assignCustomRole` in `RoleAssignmentService`, plus `createCustomRole` and `updateCustomRole` in `CustomRoleService`) emitted `PRIVILEGED_ROLE_GRANT_ATTEMPTED` / `PERMISSION_DELEGATION_VIOLATION_ATTEMPTED` audit events and triggered security alerts before throwing `RoleAssignmentAccessDeniedException` or `CustomRoleAccessDeniedException`. Spring's default runtime-exception rollback rule reverted the enclosing database transaction, erasing the persistent audit rows and security alerts while still returning `403 Forbidden`. Additionally, `CustomRoleService.updateCustomRole` mutated managed `displayName`, `description`, and `active` entity fields prior to running `validatePermissions` and `validateDelegationAuthority`.
+- **Fix:**
+  - Configured `@Transactional(noRollbackFor = ...)` for `RoleAssignmentAccessDeniedException` on `assignOrganizationRole` and `{RoleAssignmentAccessDeniedException.class, CustomRoleAccessDeniedException.class}` on `assignCustomRole` in [`RoleAssignmentService.java`](../../backend/app/src/main/java/com/devflow/role/service/RoleAssignmentService.java), after verifying no mutating writes precede those denied throws.
+  - Configured `@Transactional(noRollbackFor = CustomRoleAccessDeniedException.class)` on `createCustomRole` and `updateCustomRole` in [`CustomRoleService.java`](../../backend/app/src/main/java/com/devflow/role/service/CustomRoleService.java), and reordered `updateCustomRole` so `validatePermissions` and `validateDelegationAuthority` execute before any entity field setters run.
+- **Verification:** `OrganizationRoleControllerIntegrationTest`, `CustomRoleControllerIntegrationTest`, `PermissionGovernanceServiceTest`, `Stage9SecurityAndIsolationIntegrationTest`, and `Stage9EndToEndLiveSmokeIntegrationTest` (confirming `403` escalation and delegation-violation requests retain persistent audits, open alerts, and clean HMAC chain integrity without partial metadata updates).
+
+### 3.9 Operational Observation — Lettuce Reconnect Backoff After Redis Restart
+- **Observation (during live `SHUTDOWN NOSAVE` & restart testing):** Immediately after a restarted Redis server begins answering TCP `PING -> PONG`, Lettuce's shared `StatefulRedisConnection` `ConnectionWatchdog` can remain in exponential reconnect backoff for ~1–4 seconds, causing initial `StringRedisTemplate` lookups to time out at `spring.data.redis.timeout` (`2000ms` default in `application.yml`; `1s` in recovery tests) and temporarily fall back to local cache/DB.
+- **Mitigation & Verified Guarantee:** Once Lettuce reconnects, `RedisAuthorizationCacheService.replayPendingRedisEvictionsIfNeeded()` flushes queued outage evictions/keys before executing subsequent reads or writes, preventing stale RDB entries from being served and ensuring healthy Redis misses never fall back to stale `localCache` (`LiveRedisOutageRecoveryIntegrationTest`).
+
 ---
 
 ## 4. Performance Benchmark Results
 
-Measured in [`Stage9AuthorizationBenchmarkTest.java`](../../backend/app/src/test/java/com/devflow/performance/Stage9AuthorizationBenchmarkTest.java) against local PostgreSQL 17 during the full `cleanTest test build bootJar` run:
+Measured in [`Stage9AuthorizationBenchmarkTest.java`](../../backend/app/src/test/java/com/devflow/performance/Stage9AuthorizationBenchmarkTest.java) against live **PostgreSQL 17.11** (`localhost:5432`) and live **Redis 8.10.3** (`127.0.0.1:6370`) during the final `cleanTest test build bootJar` run:
 
 | Benchmark | Iterations | Throughput (ops/s) | Mean (ms) | p50 (ms) | p95 (ms) | p99 (ms) |
 | :--- | ---: | ---: | ---: | ---: | ---: | ---: |
-| `PureEvaluator` Organization Authz (in-process) | 5,000 | 138,890.0 | 0.0072 | 0.0059 | 0.0083 | 0.0175 |
-| `PureEvaluator` Project Authz (in-process) | 5,000 | 117,167.4 | 0.0085 | 0.0080 | 0.0108 | 0.0159 |
-| `PureEvaluator` Custom Role Authz (in-process) | 5,000 | 166,686.1 | 0.0060 | 0.0058 | 0.0074 | 0.0094 |
-| Full `AuthApi` Organization Cache Hit * | 100 | 189.1 | 5.2871 | 5.2265 | 6.2176 | 7.0659 |
-| Full `AuthApi` Project Cache Hit * | 100 | 133.8 | 7.4746 | 6.7892 | 10.8255 | 13.0420 |
-| Full `AuthApi` Custom Role Cache Hit * | 100 | 173.1 | 5.7757 | 5.3518 | 8.3868 | 10.3496 |
-| Full `AuthApi` Organization Cache Miss + DB | 50 | 77.8 | 12.8506 | 11.4988 | 22.9639 | 32.2958 |
-| Role Grant + Revoke Cycle (Lock + Audit + DB) | 25 | 33.7 | 29.6770 | 29.7169 | 35.9858 | 36.1541 |
-| Durable PostgreSQL Audit Persist + HashChain | 100 | 335.9 | 2.9760 | 2.7935 | 4.4010 | 5.8398 |
+| `PureEvaluator` Organization Authz (in-process) | 5,000 | 94,317.0 | 0.0105 | 0.0066 | 0.0239 | 0.0329 |
+| `PureEvaluator` Project Authz (in-process) | 5,000 | 68,085.4 | 0.0146 | 0.0079 | 0.0281 | 0.0413 |
+| `PureEvaluator` Custom Role Authz (in-process) | 5,000 | 196,001.6 | 0.0051 | 0.0044 | 0.0069 | 0.0209 |
+| `Full AuthApi` Organization Cache Hit (live Redis) | 100 | 112.0 | 8.9290 | 6.1606 | 7.5705 | 69.6340 |
+| `Full AuthApi` Project Cache Hit (live Redis) | 100 | 149.0 | 6.7103 | 6.5628 | 7.8959 | 9.7340 |
+| `Full AuthApi` Custom Role Cache Hit (live Redis) | 100 | 193.1 | 5.1785 | 5.0821 | 5.9003 | 6.2550 |
+| `Full AuthApi` Organization Cache Miss + DB | 50 | 76.1 | 13.1430 | 13.1630 | 14.0294 | 15.0812 |
+| Role Grant + Revoke Cycle (Lock + Audit + DB) | 25 | 30.2 | 33.1484 | 31.0790 | 48.5780 | 51.7551 |
+| Durable PostgreSQL Audit Persist + HashChain | 100 | 365.4 | 2.7360 | 2.7090 | 3.2768 | 3.3983 |
 
-> **\*Benchmark Environment Note:** In the test profile ([`application-test.yml`](../../backend/app/src/main/resources/application-test.yml)), Redis points to `localhost:6370` where no Redis server was running. Therefore, each `Full AuthApi ... Cache Hit` operation incurred a TCP connection-refusal round-trip on Redis reads before hitting the local L1 fallback cache. Against a live healthy local/VPC Redis instance, sub-millisecond cache hit reads are expected instead of socket-error fallback overhead.
+> **Benchmark Environment Note:** Unlike the earlier offline-Redis run, all `Full AuthApi ... Cache Hit` timings above executed against a live Redis 8.10.3 socket (`127.0.0.1:6370`). Each end-to-end `AuthApi` authorization call still includes active membership validation and synchronous hash-chained PostgreSQL audit persistence (~`2.74 ms` mean standalone), which accounts for the ~`5.18–8.93 ms` full-path latency. Pure policy evaluation (`AuthorizationEvaluator`) remains sub-15 microseconds (~68k–196k ops/s).
 
 ---
 
 ## 5. Verification & Build Results
 
-Executed `cd backend && ./gradlew cleanTest test build bootJar`:
+Executed `cd backend && ./gradlew cleanTest test build bootJar` with live PostgreSQL 17.11 and live Redis 8.10.3 (`127.0.0.1:6370`):
 
 | Check / Suite | Outcome | Observed Result |
 | :--- | :--- | :--- |
 | `:devflow-auth:test` | **PASS** | **208 / 208** tests passed across **15** test suites (0 skipped, 0 failures, 0 errors) |
-| `:app:test` (incl. 23 new Stage 9 tests) | **PASS** | **753 / 753** tests passed across **192** test suites (0 skipped, 0 failures, 0 errors) |
-| Combined Backend Test Suite | **PASS** | **961 / 961** tests passed (0 skipped, 0 failures, 0 errors) |
-| `./gradlew build` | **PASS** | `BUILD SUCCESSFUL` across `:app` and `:devflow-auth` |
-| `./gradlew bootJar` | **PASS** | Built `backend/app/build/libs/devflow-backend-0.0.1-SNAPSHOT.jar` (73M) |
+| `:app:test` | **PASS** | **768 / 768** tests passed across **195** test suites (0 skipped, 0 failures, 0 errors) |
+| Combined Backend Test Suite | **PASS** | **976 / 976** tests passed across **210** test suites (0 skipped, 0 failures, 0 errors) |
+| `./gradlew build` | **PASS** | `BUILD SUCCESSFUL` across `:app` and `:devflow-auth` (`1m 19s`) |
+| `./gradlew bootJar` | **PASS** | Built `backend/app/build/libs/devflow-backend-0.0.1-SNAPSHOT.jar` (`73M`) |
 
-### New Stage 9 Test Suites Added
-- [`ConfigurationValidatorTest.java`](../../backend/app/src/test/java/com/devflow/config/ConfigurationValidatorTest.java) (7 tests)
-- [`RedisAuthorizationCacheHardeningTest.java`](../../backend/app/src/test/java/com/devflow/security/authorization/cache/RedisAuthorizationCacheHardeningTest.java) (5 tests)
-- [`Stage9SecurityAndIsolationIntegrationTest.java`](../../backend/app/src/test/java/com/devflow/security/Stage9SecurityAndIsolationIntegrationTest.java) (4 integration tests)
-- [`Stage9ConcurrencyAndAuditIntegrityIntegrationTest.java`](../../backend/app/src/test/java/com/devflow/security/Stage9ConcurrencyAndAuditIntegrityIntegrationTest.java) (6 integration tests)
-- [`Stage9AuthorizationBenchmarkTest.java`](../../backend/app/src/test/java/com/devflow/performance/Stage9AuthorizationBenchmarkTest.java) (1 benchmark suite)
+### Stage 9 Verification Suites Added / Updated
+- [`ConfigurationValidatorTest.java`](../../backend/app/src/test/java/com/devflow/config/ConfigurationValidatorTest.java) (**9** tests — includes `application-prod.yml` `ApplicationContextRunner` binding validation)
+- [`RedisAuthorizationCacheHardeningTest.java`](../../backend/app/src/test/java/com/devflow/security/authorization/cache/RedisAuthorizationCacheHardeningTest.java) (**5** unit tests)
+- [`LiveRedisAuthorizationCacheIntegrationTest.java`](../../backend/app/src/test/java/com/devflow/security/authorization/cache/LiveRedisAuthorizationCacheIntegrationTest.java) (**8** integration tests against live Redis `8.10.3`)
+- [`LiveRedisOutageRecoveryIntegrationTest.java`](../../backend/app/src/test/java/com/devflow/security/authorization/cache/LiveRedisOutageRecoveryIntegrationTest.java) (**2** live-process outage & RDB recovery integration tests)
+- [`Stage9SecurityAndIsolationIntegrationTest.java`](../../backend/app/src/test/java/com/devflow/security/Stage9SecurityAndIsolationIntegrationTest.java) (**4** integration tests)
+- [`Stage9ConcurrencyAndAuditIntegrityIntegrationTest.java`](../../backend/app/src/test/java/com/devflow/security/Stage9ConcurrencyAndAuditIntegrityIntegrationTest.java) (**8** integration tests, adding transaction rollback audit continuity and concurrent org role grant/revoke tests)
+- [`Stage9EndToEndLiveSmokeIntegrationTest.java`](../../backend/app/src/test/java/com/devflow/security/Stage9EndToEndLiveSmokeIntegrationTest.java) (**1** full HTTP `RANDOM_PORT` live smoke test)
+- [`Stage9AuthorizationBenchmarkTest.java`](../../backend/app/src/test/java/com/devflow/performance/Stage9AuthorizationBenchmarkTest.java) (**1** benchmark suite against live PostgreSQL + live Redis)
+
+### Live Infrastructure Closure Checks (PostgreSQL 17.11 & Redis 8.10.3)
+
+| Infrastructure Track | Scope & Method | Status | Notes |
+| :--- | :--- | :--- | :--- |
+| Live PostgreSQL Migrations & Restart | Isolated DB clean `V1`–`V16`, populated `V1`–`V15 -> V16` upgrade, `postgresql@17` service restart & query continuity (temp DBs dropped afterward) | **PASS** | `V1`–`V15` untouched; `V16` triggers/indexes intact. |
+| Live Redis 15-Scenario Cache Matrix | Cache miss/hit, `1s` TTL expiration, org grant/revoke & project revoke invalidation, custom-role permission update invalidation, membership removal clearing 4 key namespaces, tenant isolation, cursor `SCAN` over `1,250` org keys, 6-thread concurrency, `SHUTDOWN NOSAVE` outage & stale RDB replay recovery, and wiped-Redis healthy miss bypassing stale L1 | **PASS** | `LiveRedisAuthorizationCacheIntegrationTest` & `LiveRedisOutageRecoveryIntegrationTest` expect live Redis on test port `6370` (`application-test.yml` / `docker-compose.yml`). Single-node local Redis tested; multi-node Cluster/Sentinel HA & TLS Redis transport apply to staging/prod. |
+| Live E2E HTTP Security Smoke (`RANDOM_PORT`) | `/api/v1/auth/login` JWT issuance, `401` on unauth/refresh token, spoofed header rejection (`403`), canonical & custom role live updates invalidating Redis cache (`403 -> 201 -> 403`), cross-tenant anti-enumeration (`403`), escalation/delegation audit retention (`noRollbackFor`), HMAC chain verify (`valid=true, tampered=false`), and alert `ACKNOWLEDGED` -> `RESOLVED` | **PASS** | `Stage9EndToEndLiveSmokeIntegrationTest` |
+| Production Profile & Config Audit | Tested actual `application.yml` + `application-prod.yml` loading under `prod` profile (`ConfigurationValidatorTest`) | **PASS** | Confirmed both `DEVFLOW_SECURITY_CORS_ALLOWED_ORIGINS` and `DEVFLOW_CORS_ALLOWED_ORIGINS` bind properly (`[]` when unset), `springdoc` disabled, `in-memory-buffer-size: 0`, and `spring.data.redis.ssl.enabled: true`. |
 
 ---
 
@@ -157,7 +180,7 @@ When deploying with `SPRING_PROFILES_ACTIVE=prod` ([`application-prod.yml`](../.
 | `DEVFLOW_REDIS_PASSWORD` | `spring.data.redis.password` | Redis ACL / AUTH credential. |
 | `DEVFLOW_JWT_SECRET` | `devflow.security.jwt.secret` | **Required by `ConfigurationValidator`:** non-default secret, >= 64 UTF-8 bytes (512 bits for HS512). |
 | `DEVFLOW_AUDIT_INTEGRITY_KEY` | `devflow.security.audit.integrity-key` | **Required by `ConfigurationValidator`:** non-default HMAC secret, >= 32 UTF-8 bytes for SHA-256 checkpoint signing. |
-| `DEVFLOW_SECURITY_CORS_ALLOWED_ORIGINS` | `devflow.security.cors.allowed-origins` | Explicit comma-separated HTTPS origin list (wildcards `*` and blank entries are rejected). |
+| `DEVFLOW_SECURITY_CORS_ALLOWED_ORIGINS` / `DEVFLOW_CORS_ALLOWED_ORIGINS` | `devflow.security.cors.allowed-origins` | Explicit comma-separated HTTPS origin list (`application-prod.yml` binds `${DEVFLOW_CORS_ALLOWED_ORIGINS:}` and `DEVFLOW_SECURITY_CORS_ALLOWED_ORIGINS` overrides via relaxed env binding; defaults to `[]` if unset; wildcards `*` and blank entries are rejected). |
 
 ### Optional Operational & Hardening Settings
 
@@ -169,14 +192,16 @@ When deploying with `SPRING_PROFILES_ACTIVE=prod` ([`application-prod.yml`](../.
 | `DEVFLOW_AVATAR_UPLOAD_DIR` / `BASE_URL` / `MAX_SIZE_BYTES` | `./uploads/avatars` / local / `5242880` | Point upload dir/CDN URL to persistent volume / object storage CDN in prod. |
 | `springdoc.api-docs.enabled` / `swagger-ui.enabled` | `false` (`application-prod.yml`) | Enforced `false` by `ConfigurationValidator` when `prod` profile is active. |
 
+> **Test Suite Infrastructure Prerequisite:** Running `:app:test` requires PostgreSQL (default `jdbc:postgresql://localhost:5432/devflow_test`) and Redis (default `localhost:6370`, matching [`docker-compose.yml`](../../backend/docker-compose.yml)) because `LiveRedisAuthorizationCacheIntegrationTest` and `Stage9EndToEndLiveSmokeIntegrationTest` assert live Redis connectivity (`PING`).
+
 ---
 
 ## 7. Pre-Release Production Checklist
 
-- [ ] Provision PostgreSQL 17 with automated encrypted backups and run Flyway migrations (`V1`–`V16`) under `validate-on-migrate: true`.
+- [ ] Provision managed PostgreSQL 17 with automated encrypted backups and run Flyway migrations (`V1`–`V16`) under `validate-on-migrate: true`.
 - [ ] Verify DB triggers `trg_prevent_audit_log_update_delete` and `trg_prevent_checkpoint_update_delete` remain enabled and the runtime DB user lacks `SUPERUSER`/trigger-bypass privileges.
 - [ ] Inject freshly generated high-entropy `DEVFLOW_JWT_SECRET` (>= 64 bytes) and `DEVFLOW_AUDIT_INTEGRITY_KEY` (>= 32 bytes) from secrets manager.
-- [ ] Configure TLS-enabled Redis (`DEVFLOW_REDIS_HOST`, `DEVFLOW_REDIS_PASSWORD`) and monitor Redis reconnect/eviction-replay logs (`RedisAuthorizationCacheService`) in log aggregation.
-- [ ] Configure explicit `DEVFLOW_SECURITY_CORS_ALLOWED_ORIGINS` for deployed web origins.
+- [ ] Configure TLS-enabled Redis (`DEVFLOW_REDIS_HOST`, `DEVFLOW_REDIS_PASSWORD`), verify staging HA failover with Lettuce backoff (`spring.data.redis.timeout`), and monitor eviction-replay logs (`RedisAuthorizationCacheService`) in log aggregation.
+- [ ] Configure explicit `DEVFLOW_SECURITY_CORS_ALLOWED_ORIGINS` (or `DEVFLOW_CORS_ALLOWED_ORIGINS`) for deployed web origins.
 - [ ] Expose application port (`PORT`) via TLS-terminating reverse proxy and keep Actuator (`MANAGEMENT_PORT`) isolated on internal cluster network only.
-- [ ] Re-run `Stage9AuthorizationBenchmarkTest` against a live TLS Redis endpoint in staging to establish baseline Redis cache hit latency SLOs.
+- [ ] Re-run `Stage9AuthorizationBenchmarkTest` against managed staging PostgreSQL + TLS Redis to confirm production latency SLOs under cluster network RTT.
