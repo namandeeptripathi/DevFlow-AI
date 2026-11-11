@@ -87,7 +87,7 @@ public class CustomRoleService {
     /**
      * Creates a new organization-scoped custom role.
      */
-    @Transactional
+    @Transactional(noRollbackFor = CustomRoleAccessDeniedException.class)
     public CustomRoleEntity createCustomRole(
             UUID organizationId,
             UUID callerUserId,
@@ -218,7 +218,7 @@ public class CustomRoleService {
     /**
      * Updates an existing custom role definition.
      */
-    @Transactional
+    @Transactional(noRollbackFor = CustomRoleAccessDeniedException.class)
     public CustomRoleEntity updateCustomRole(
             UUID organizationId,
             UUID roleId,
@@ -238,6 +238,14 @@ public class CustomRoleService {
                         "Custom role [" + roleId + "] not found in organization [" + organizationId + "]"
                 ));
 
+        // Validate permissions and delegation authority before mutating any managed entity state so
+        // security-violation audit records committed via noRollbackFor do not persist partial changes.
+        Set<Permission> validatedPermissions = null;
+        if (request.getPermissions() != null) {
+            validatedPermissions = permissionGovernanceService.validatePermissions(request.getPermissions());
+            permissionGovernanceService.validateDelegationAuthority(organizationId, callerUserId, validatedPermissions);
+        }
+
         if (request.getDisplayName() != null && !request.getDisplayName().isBlank()) {
             role.setDisplayName(request.getDisplayName().trim());
         }
@@ -251,10 +259,7 @@ public class CustomRoleService {
         }
 
         // Update permissions if provided
-        if (request.getPermissions() != null) {
-            Set<Permission> validatedPermissions = permissionGovernanceService.validatePermissions(request.getPermissions());
-            permissionGovernanceService.validateDelegationAuthority(organizationId, callerUserId, validatedPermissions);
-
+        if (validatedPermissions != null) {
             Set<PermissionEntity> targetEntities = permissionGovernanceService.resolvePermissionEntities(validatedPermissions);
             Set<UUID> targetPermIds = targetEntities.stream().map(PermissionEntity::getId).collect(Collectors.toSet());
 

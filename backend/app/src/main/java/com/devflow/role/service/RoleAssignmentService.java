@@ -154,7 +154,7 @@ public class RoleAssignmentService {
      * @param expiresAt optional expiration timestamp
      * @return the persisted {@link OrganizationRoleAssignment}
      */
-    @Transactional
+    @Transactional(noRollbackFor = RoleAssignmentAccessDeniedException.class)
     public OrganizationRoleAssignment assignOrganizationRole(
             UUID organizationId,
             UUID targetUserId,
@@ -507,7 +507,10 @@ public class RoleAssignmentService {
      * @param expiresAt optional expiration timestamp
      * @return the persisted {@link CustomRoleAssignment}
      */
-    @Transactional
+    @Transactional(noRollbackFor = {
+            RoleAssignmentAccessDeniedException.class,
+            com.devflow.role.exception.CustomRoleAccessDeniedException.class
+    })
     public CustomRoleAssignment assignCustomRole(
             UUID organizationId,
             UUID targetUserId,
