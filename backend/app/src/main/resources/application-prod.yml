@@ -129,6 +129,9 @@ logging:
 # The properties below configure non-secret security parameters.
 devflow:
   security:
+    audit:
+      # Disable in-memory diagnostic audit ring buffer in production to bound JVM heap usage.
+      in-memory-buffer-size: 0
     cors:
       # Permitted CORS origins for production.
       #

@@ -8,14 +8,17 @@ import com.devflow.modules.auth.audit.AuthorizationAuditEventType;
 import com.devflow.modules.auth.domain.Permission;
 import com.devflow.security.monitoring.exception.AuditLogNotFoundException;
 import com.devflow.util.TraceContext;
+import jakarta.persistence.EntityManager;
+import jakarta.persistence.PersistenceContext;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
-import org.springframework.data.jpa.domain.Specification;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.time.Instant;
 import java.util.Map;
@@ -66,6 +69,10 @@ public class AuthorizationAuditService {
     private final AuditIntegrityService auditIntegrityService;
     private final Map<String, Object> tenantLocks = new ConcurrentHashMap<>();
 
+    @PersistenceContext
+    private EntityManager entityManager;
+
+    @Autowired
     public AuthorizationAuditService(
             AuthorizationAuditEventRepository auditEventRepository,
             AuditIntegrityService auditIntegrityService
@@ -76,6 +83,9 @@ public class AuthorizationAuditService {
 
     /**
      * Persists an audit event to the append-only ledger, linking it to the previous hash in the tenant chain.
+     *
+     * <p>Acquires a transaction-scoped PostgreSQL advisory lock per tenant chain so concurrent
+     * transactions serialize sequence number and hash-chain derivation without silent corruption.
      */
     @Transactional(propagation = Propagation.REQUIRED)
     public AuthorizationAuditEventEntity persistAuditEvent(AuthorizationAuditEvent event) {
@@ -85,96 +95,16 @@ public class AuthorizationAuditService {
 
         String orgIdStr = event.getOrganizationId().map(UUID::toString).orElse(null);
         String lockKey = orgIdStr != null ? orgIdStr : "platform_global";
-        Object lock = tenantLocks.computeIfAbsent(lockKey, k -> new Object());
 
         try {
+            if (entityManager != null && TransactionSynchronizationManager.isActualTransactionActive()) {
+                acquireTenantAdvisoryLock("devflow:audit:" + lockKey);
+                return persistAuditEventInternal(event, orgIdStr);
+            }
+
+            Object lock = tenantLocks.computeIfAbsent(lockKey, k -> new Object());
             synchronized (lock) {
-                // Determine next monotonic sequence number
-                Long maxSeq = auditEventRepository.findMaxSequenceNumber(orgIdStr);
-                long nextSeq = (maxSeq == null) ? 1L : maxSeq + 1L;
-
-                // Determine previous record hash
-                String prevHash;
-                if (nextSeq == 1L) {
-                    prevHash = AuditIntegrityService.GENESIS_HASH;
-                } else {
-                    Optional<AuthorizationAuditEventEntity> prevRecord = (orgIdStr != null)
-                            ? auditEventRepository.findTopByOrganizationIdOrderBySequenceNumberDesc(orgIdStr)
-                            : auditEventRepository.findTopByOrganizationIdIsNullOrderBySequenceNumberDesc();
-                    prevHash = prevRecord.map(AuthorizationAuditEventEntity::getRecordHash).orElse(AuditIntegrityService.GENESIS_HASH);
-                }
-
-                // Resolve correlation ID
-                String correlationId = event.getCorrelationId().orElseGet(TraceContext::getCorrelationId);
-
-                // Format requested permissions as comma-separated canonical string
-                String permissionsStr = event.requestedPermissions() != null && !event.requestedPermissions().isEmpty()
-                        ? event.requestedPermissions().stream().map(Permission::value).sorted().collect(Collectors.joining(","))
-                        : null;
-
-                String eventIdStr = event.eventId().toString();
-                String userIdStr = event.userId().toString();
-                String scopeStr = event.scope().name();
-                String projIdStr = event.getProjectId().map(UUID::toString).orElse(null);
-                String resourceTypeStr = event.getResourceType().orElse(null);
-                String resourceIdStr = event.getResourceId().orElse(null);
-                String decisionStr = event.decision().allowed() ? "ALLOW" : "DENY";
-                String denialReasonStr = event.getDenialReason().map(Enum::name).orElse(null);
-                String targetIdStr = event.getTargetId().map(UUID::toString).orElse(null);
-                String targetTypeStr = event.getTargetType().orElse(null);
-                String prevStateStr = event.getPreviousState().orElse(null);
-                String newStateStr = event.getNewState().orElse(null);
-                String reasonStr = event.getReason().orElse(null);
-
-                // Compute deterministic cryptographic SHA-256 hash
-                String recordHash = auditIntegrityService.computeRecordHash(
-                        nextSeq,
-                        eventIdStr,
-                        event.timestamp(),
-                        event.eventType().name(),
-                        userIdStr,
-                        scopeStr,
-                        orgIdStr,
-                        projIdStr,
-                        resourceTypeStr,
-                        resourceIdStr,
-                        decisionStr,
-                        denialReasonStr,
-                        targetIdStr,
-                        targetTypeStr,
-                        prevStateStr,
-                        newStateStr,
-                        reasonStr,
-                        prevHash
-                );
-
-                AuthorizationAuditEventEntity entity = AuthorizationAuditEventEntity.builder()
-                        .id(UUID.randomUUID().toString())
-                        .sequenceNumber(nextSeq)
-                        .eventId(eventIdStr)
-                        .timestamp(event.timestamp())
-                        .eventType(event.eventType().name())
-                        .userId(userIdStr)
-                        .scope(scopeStr)
-                        .organizationId(orgIdStr)
-                        .projectId(projIdStr)
-                        .resourceType(resourceTypeStr)
-                        .resourceId(resourceIdStr)
-                        .requestedPermissions(permissionsStr)
-                        .decision(decisionStr)
-                        .denialReason(denialReasonStr)
-                        .correlationId(correlationId)
-                        .targetId(targetIdStr)
-                        .targetType(targetTypeStr)
-                        .previousState(prevStateStr)
-                        .newState(newStateStr)
-                        .reason(reasonStr)
-                        .recordHash(recordHash)
-                        .previousRecordHash(prevHash)
-                        .createdAt(Instant.now())
-                        .build();
-
-                return auditEventRepository.save(entity);
+                return persistAuditEventInternal(event, orgIdStr);
             }
         } catch (Exception e) {
             log.error("Failed to persist authorization audit event [{}]: {}", event.eventId(), e.getMessage(), e);
@@ -186,6 +116,123 @@ public class AuthorizationAuditService {
             // Normal authorization evaluation decision logging fails safely
             return null;
         }
+    }
+
+    private void acquireTenantAdvisoryLock(String lockName) {
+        entityManager.createNativeQuery(
+                        "SELECT 1 FROM (SELECT pg_advisory_xact_lock(hashtextextended(:lockName, 0))) AS _lock")
+                .setParameter("lockName", lockName)
+                .getSingleResult();
+    }
+
+    private AuthorizationAuditEventEntity persistAuditEventInternal(AuthorizationAuditEvent event, String orgIdStr) {
+        String eventIdStr = event.eventId().toString();
+
+        // Idempotent retry protection: do not append duplicate event_id records
+        Optional<AuthorizationAuditEventEntity> existing = auditEventRepository.findByEventId(eventIdStr);
+        if (existing.isPresent()) {
+            return existing.get();
+        }
+
+        // Determine next monotonic sequence number
+        Long maxSeq = auditEventRepository.findMaxSequenceNumber(orgIdStr);
+        long nextSeq = (maxSeq == null) ? 1L : maxSeq + 1L;
+
+        // Determine previous record hash
+        String prevHash;
+        if (nextSeq == 1L) {
+            prevHash = AuditIntegrityService.GENESIS_HASH;
+        } else {
+            Optional<AuthorizationAuditEventEntity> prevRecord = (orgIdStr != null)
+                    ? auditEventRepository.findTopByOrganizationIdOrderBySequenceNumberDesc(orgIdStr)
+                    : auditEventRepository.findTopByOrganizationIdIsNullOrderBySequenceNumberDesc();
+            prevHash = prevRecord.map(AuthorizationAuditEventEntity::getRecordHash)
+                    .orElse(AuditIntegrityService.GENESIS_HASH);
+        }
+
+        // Resolve and sanitize correlation ID so untrusted headers cannot overflow VARCHAR(100)
+        String rawCorrelationId = event.getCorrelationId().orElseGet(TraceContext::getCorrelationId);
+        String correlationId = TraceContext.sanitize(rawCorrelationId);
+
+        // Format requested permissions as comma-separated canonical string
+        String permissionsStr = event.requestedPermissions() != null && !event.requestedPermissions().isEmpty()
+                ? event.requestedPermissions().stream().map(Permission::value).sorted().collect(Collectors.joining(","))
+                : null;
+
+        String userIdStr = event.userId().toString();
+        String scopeStr = event.scope().name();
+        String eventTypeStr = clamp(event.eventType().name(), 60);
+        String projIdStr = event.getProjectId().map(UUID::toString).orElse(null);
+        String resourceTypeStr = clamp(event.getResourceType().orElse(null), 100);
+        String resourceIdStr = clamp(event.getResourceId().orElse(null), 100);
+        String decisionStr = event.decision().allowed() ? "ALLOW" : "DENY";
+        String denialReasonStr = clamp(event.getDenialReason().map(Enum::name).orElse(null), 60);
+        String targetIdStr = event.getTargetId().map(UUID::toString).orElse(null);
+        String targetTypeStr = clamp(event.getTargetType().orElse(null), 50);
+        String prevStateStr = event.getPreviousState().orElse(null);
+        String newStateStr = event.getNewState().orElse(null);
+        String reasonStr = clamp(event.getReason().orElse(null), 500);
+
+        // Compute deterministic cryptographic SHA-256 hash over persisted field values
+        String recordHash = auditIntegrityService.computeRecordHash(
+                nextSeq,
+                eventIdStr,
+                event.timestamp(),
+                eventTypeStr,
+                userIdStr,
+                scopeStr,
+                orgIdStr,
+                projIdStr,
+                resourceTypeStr,
+                resourceIdStr,
+                decisionStr,
+                denialReasonStr,
+                targetIdStr,
+                targetTypeStr,
+                prevStateStr,
+                newStateStr,
+                reasonStr,
+                prevHash
+        );
+
+        AuthorizationAuditEventEntity entity = AuthorizationAuditEventEntity.builder()
+                .id(UUID.randomUUID().toString())
+                .sequenceNumber(nextSeq)
+                .eventId(eventIdStr)
+                .timestamp(event.timestamp())
+                .eventType(eventTypeStr)
+                .userId(userIdStr)
+                .scope(scopeStr)
+                .organizationId(orgIdStr)
+                .projectId(projIdStr)
+                .resourceType(resourceTypeStr)
+                .resourceId(resourceIdStr)
+                .requestedPermissions(permissionsStr)
+                .decision(decisionStr)
+                .denialReason(denialReasonStr)
+                .correlationId(correlationId)
+                .targetId(targetIdStr)
+                .targetType(targetTypeStr)
+                .previousState(prevStateStr)
+                .newState(newStateStr)
+                .reason(reasonStr)
+                .recordHash(recordHash)
+                .previousRecordHash(prevHash)
+                .createdAt(Instant.now())
+                .build();
+
+        AuthorizationAuditEventEntity saved = auditEventRepository.save(entity);
+        if (entityManager != null && TransactionSynchronizationManager.isActualTransactionActive()) {
+            entityManager.flush();
+        }
+        return saved;
+    }
+
+    private static String clamp(String value, int maxLen) {
+        if (value == null || value.length() <= maxLen) {
+            return value;
+        }
+        return value.substring(0, maxLen);
     }
 
     /**
@@ -208,32 +255,9 @@ public class AuthorizationAuditService {
         String userIdStr = userId != null ? userId.toString() : null;
         String targetIdStr = targetId != null ? targetId.toString() : null;
 
-        Specification<AuthorizationAuditEventEntity> spec = (root, query, cb) -> {
-            java.util.List<jakarta.persistence.criteria.Predicate> predicates = new java.util.ArrayList<>();
-            predicates.add(cb.equal(root.get("organizationId"), orgIdStr));
-            if (eventType != null && !eventType.isBlank()) {
-                predicates.add(cb.equal(root.get("eventType"), eventType.trim()));
-            }
-            if (userIdStr != null && !userIdStr.isBlank()) {
-                predicates.add(cb.equal(root.get("userId"), userIdStr.trim()));
-            }
-            if (targetIdStr != null && !targetIdStr.isBlank()) {
-                predicates.add(cb.equal(root.get("targetId"), targetIdStr.trim()));
-            }
-            if (decision != null && !decision.isBlank()) {
-                predicates.add(cb.equal(root.get("decision"), decision.trim().toUpperCase()));
-            }
-            if (from != null) {
-                predicates.add(cb.greaterThanOrEqualTo(root.get("timestamp"), from));
-            }
-            if (to != null) {
-                predicates.add(cb.lessThanOrEqualTo(root.get("timestamp"), to));
-            }
-            query.orderBy(cb.desc(root.get("sequenceNumber")));
-            return cb.and(predicates.toArray(new jakarta.persistence.criteria.Predicate[0]));
-        };
-
-        return auditEventRepository.findAll(spec, pageable).map(AuditLogResponse::fromEntity);
+        return auditEventRepository.findTenantAuditLogs(
+                orgIdStr, eventType, userIdStr, targetIdStr, decision, from, to, pageable)
+                .map(AuditLogResponse::fromEntity);
     }
 
     /**

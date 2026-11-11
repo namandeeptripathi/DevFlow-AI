@@ -8,14 +8,20 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.data.redis.core.Cursor;
+import org.springframework.data.redis.core.ScanOptions;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.EnumSet;
 import java.util.HashSet;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -23,6 +29,8 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.regex.Pattern;
 
 /**
  * Production authorization cache service integrating Spring Data Redis with safe in-memory fallback.
@@ -41,13 +49,21 @@ import java.util.concurrent.ConcurrentHashMap;
 public class RedisAuthorizationCacheService implements AuthorizationCacheService {
 
     private static final Logger log = LoggerFactory.getLogger(RedisAuthorizationCacheService.class);
+    private static final int SCAN_BATCH_SIZE = 500;
+    private static final int MAX_PENDING_EVICTIONS = 5_000;
 
     private final StringRedisTemplate redisTemplate;
     private final AuthorizationCacheProperties properties;
     private final ObjectMapper objectMapper;
 
-    // Resilient fallback in-memory cache for local development, test environments, or Redis outages
+    // Resilient fallback in-memory cache used only when Redis is disabled or unreachable
     private final Map<String, LocalCacheEntry> localCache = new ConcurrentHashMap<>();
+
+    // Pending Redis invalidations recorded during outages and replayed on recovery before serving Redis reads
+    private final Set<String> pendingRedisEvictKeys = ConcurrentHashMap.newKeySet();
+    private final Set<String> pendingRedisEvictPatterns = ConcurrentHashMap.newKeySet();
+    private final AtomicBoolean pendingFullRedisFlush = new AtomicBoolean(false);
+    private final Object redisRecoveryLock = new Object();
 
     private record LocalCacheEntry(Object value, Instant expiresAt) {
         boolean isExpired(Instant now) {
@@ -215,11 +231,12 @@ public class RedisAuthorizationCacheService implements AuthorizationCacheService
         localCache.clear();
         if (redisTemplate != null) {
             try {
-                Set<String> keys = redisTemplate.keys(properties.getKeyPrefix() + "*");
-                if (keys != null && !keys.isEmpty()) {
-                    redisTemplate.delete(keys);
-                }
+                deleteMatchingRedisKeys(properties.getKeyPrefix() + "*");
+                pendingFullRedisFlush.set(false);
+                pendingRedisEvictKeys.clear();
+                pendingRedisEvictPatterns.clear();
             } catch (Exception e) {
+                pendingFullRedisFlush.set(true);
                 log.warn("Failed to clear Redis authorization cache: {}", e.getMessage());
             }
         }
@@ -251,17 +268,26 @@ public class RedisAuthorizationCacheService implements AuthorizationCacheService
         // 1. Try Redis if available
         if (redisTemplate != null) {
             try {
+                replayPendingRedisEvictionsIfNeeded();
                 String raw = redisTemplate.opsForValue().get(key);
                 if (raw != null) {
-                    T parsed = objectMapper.readValue(raw, typeRef);
-                    return Optional.ofNullable(parsed);
+                    try {
+                        T parsed = objectMapper.readValue(raw, typeRef);
+                        return Optional.ofNullable(parsed);
+                    } catch (JsonProcessingException e) {
+                        log.warn("Corrupted authorization cache entry for key [{}]: {}. Evicting key.", key, e.getMessage());
+                        redisTemplate.delete(key);
+                        return Optional.empty();
+                    }
                 }
+                // Healthy Redis returned an authoritative cache miss; never fall back to localCache
+                return Optional.empty();
             } catch (Exception e) {
                 log.warn("Redis read failure on key [{}]: {}. Falling back to local cache/database.", key, e.getMessage());
             }
         }
 
-        // 2. Try local fallback cache
+        // 2. Try local fallback cache (only reached when Redis is disabled or unavailable)
         LocalCacheEntry entry = localCache.get(key);
         if (entry != null) {
             if (entry.isExpired(now)) {
@@ -282,51 +308,177 @@ public class RedisAuthorizationCacheService implements AuthorizationCacheService
     }
 
     private void putInCache(String key, Object value) {
-        Duration ttl = Duration.ofSeconds(properties.getTtlSeconds());
+        Duration ttl = Duration.ofSeconds(Math.max(1L, properties.getTtlSeconds()));
         Instant expiresAt = Instant.now().plus(ttl);
+        LocalCacheEntry entry = new LocalCacheEntry(value, expiresAt);
 
-        // 1. Store in local fallback cache
-        localCache.put(key, new LocalCacheEntry(value, expiresAt));
-
-        // 2. Store in Redis if available
+        // 1. Store in Redis if available
         if (redisTemplate != null) {
             try {
+                replayPendingRedisEvictionsIfNeeded();
                 String json = objectMapper.writeValueAsString(value);
                 redisTemplate.opsForValue().set(key, json, ttl);
+                localCache.remove(key);
+                return;
             } catch (JsonProcessingException e) {
                 log.error("Failed to serialize authorization cache value for key [{}]: {}", key, e.getMessage());
+                return;
             } catch (Exception e) {
                 log.warn("Redis write failure on key [{}]: {}. Using local cache fallback.", key, e.getMessage());
             }
         }
+
+        // 2. Store in bounded local fallback cache only when Redis is disabled or unavailable
+        putInLocalCache(key, entry);
+    }
+
+    private void putInLocalCache(String key, LocalCacheEntry entry) {
+        int maxEntries = properties.getMaxLocalEntries();
+        if (maxEntries <= 0) {
+            return;
+        }
+        if (localCache.size() >= maxEntries && !localCache.containsKey(key)) {
+            Instant now = Instant.now();
+            localCache.entrySet().removeIf(e -> e.getValue().isExpired(now));
+            while (localCache.size() >= maxEntries) {
+                Iterator<String> it = localCache.keySet().iterator();
+                if (!it.hasNext()) {
+                    break;
+                }
+                localCache.remove(it.next());
+            }
+        }
+        localCache.put(key, entry);
     }
 
     private void evictKeys(List<String> exactKeys, String pattern) {
-        // Evict from local cache
-        for (String key : exactKeys) {
-            localCache.remove(key);
+        performEvict(exactKeys, pattern);
+
+        // Re-evict after transaction commit so concurrent readers observing pre-commit state
+        // cannot repopulate the cache with stale data during the transaction window.
+        if (TransactionSynchronizationManager.isSynchronizationActive()
+                && TransactionSynchronizationManager.isActualTransactionActive()) {
+            List<String> copyExactKeys = exactKeys != null ? List.copyOf(exactKeys) : Collections.emptyList();
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                @Override
+                public void afterCommit() {
+                    performEvict(copyExactKeys, pattern);
+                }
+            });
+        }
+    }
+
+    private void performEvict(List<String> exactKeys, String pattern) {
+        // Evict from local fallback cache
+        if (exactKeys != null) {
+            for (String key : exactKeys) {
+                localCache.remove(key);
+            }
         }
         if (pattern != null) {
-            String regex = pattern.replace("*", ".*");
-            localCache.keySet().removeIf(k -> k.matches(regex));
+            localCache.keySet().removeIf(k -> matchesGlob(k, pattern));
         }
 
-        // Evict from Redis
+        // Evict from Redis using non-blocking cursor SCAN
         if (redisTemplate != null) {
             try {
-                if (!exactKeys.isEmpty()) {
+                if (exactKeys != null && !exactKeys.isEmpty()) {
                     redisTemplate.delete(exactKeys);
                 }
                 if (pattern != null) {
-                    Set<String> matchingKeys = redisTemplate.keys(pattern);
-                    if (matchingKeys != null && !matchingKeys.isEmpty()) {
-                        redisTemplate.delete(matchingKeys);
-                    }
+                    deleteMatchingRedisKeys(pattern);
                 }
             } catch (Exception e) {
-                log.warn("Redis eviction failure for keys {} / pattern [{}]: {}", exactKeys, pattern, e.getMessage());
+                queuePendingRedisEvictions(exactKeys, pattern);
+                log.warn("Redis eviction failure for keys {} / pattern [{}]: {}. Queued for recovery replay.",
+                        exactKeys, pattern, e.getMessage());
             }
         }
+    }
+
+    private void queuePendingRedisEvictions(List<String> exactKeys, String pattern) {
+        if (pendingFullRedisFlush.get()) {
+            return;
+        }
+        if (exactKeys != null && !exactKeys.isEmpty()) {
+            pendingRedisEvictKeys.addAll(exactKeys);
+        }
+        if (pattern != null && !pattern.isBlank()) {
+            pendingRedisEvictPatterns.add(pattern);
+        }
+        if (pendingRedisEvictKeys.size() > MAX_PENDING_EVICTIONS
+                || pendingRedisEvictPatterns.size() > MAX_PENDING_EVICTIONS) {
+            pendingFullRedisFlush.set(true);
+            pendingRedisEvictKeys.clear();
+            pendingRedisEvictPatterns.clear();
+        }
+    }
+
+    private void replayPendingRedisEvictionsIfNeeded() {
+        if (redisTemplate == null) {
+            return;
+        }
+        if (!pendingFullRedisFlush.get()
+                && pendingRedisEvictKeys.isEmpty()
+                && pendingRedisEvictPatterns.isEmpty()) {
+            return;
+        }
+        synchronized (redisRecoveryLock) {
+            if (pendingFullRedisFlush.get()) {
+                deleteMatchingRedisKeys(properties.getKeyPrefix() + "*");
+                pendingFullRedisFlush.set(false);
+                pendingRedisEvictKeys.clear();
+                pendingRedisEvictPatterns.clear();
+                localCache.clear();
+                return;
+            }
+            if (!pendingRedisEvictPatterns.isEmpty()) {
+                List<String> patterns = new ArrayList<>(pendingRedisEvictPatterns);
+                for (String pattern : patterns) {
+                    deleteMatchingRedisKeys(pattern);
+                    pendingRedisEvictPatterns.remove(pattern);
+                }
+            }
+            if (!pendingRedisEvictKeys.isEmpty()) {
+                List<String> keys = new ArrayList<>(pendingRedisEvictKeys);
+                redisTemplate.delete(keys);
+                pendingRedisEvictKeys.removeAll(keys);
+            }
+            localCache.clear();
+        }
+    }
+
+    private void deleteMatchingRedisKeys(String pattern) {
+        ScanOptions options = ScanOptions.scanOptions().match(pattern).count(SCAN_BATCH_SIZE).build();
+        List<String> batch = new ArrayList<>(SCAN_BATCH_SIZE);
+        try (Cursor<String> cursor = redisTemplate.scan(options)) {
+            if (cursor == null) {
+                return;
+            }
+            while (cursor.hasNext()) {
+                batch.add(cursor.next());
+                if (batch.size() >= SCAN_BATCH_SIZE) {
+                    redisTemplate.delete(batch);
+                    batch.clear();
+                }
+            }
+            if (!batch.isEmpty()) {
+                redisTemplate.delete(batch);
+            }
+        }
+    }
+
+    private boolean matchesGlob(String key, String globPattern) {
+        String[] parts = globPattern.split("\\*", -1);
+        StringBuilder regex = new StringBuilder("^");
+        for (int i = 0; i < parts.length; i++) {
+            if (i > 0) {
+                regex.append(".*");
+            }
+            regex.append(Pattern.quote(parts[i]));
+        }
+        regex.append("$");
+        return key.matches(regex.toString());
     }
 
     private Set<Role> deserializeRoles(List<String> roleNames) {

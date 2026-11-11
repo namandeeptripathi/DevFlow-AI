@@ -25,6 +25,12 @@ public class AuthorizationCacheProperties {
      */
     private String keyPrefix = "devflow:auth:";
 
+    /**
+     * Maximum entries permitted in the process-local fallback cache when Redis is unavailable.
+     * Prevents unbounded JVM heap growth under high tenant/user cardinality or prolonged Redis outages.
+     */
+    private int maxLocalEntries = 10_000;
+
     public boolean isEnabled() {
         return enabled;
     }
@@ -47,6 +53,14 @@ public class AuthorizationCacheProperties {
 
     public void setKeyPrefix(String keyPrefix) {
         this.keyPrefix = keyPrefix;
+    }
+
+    public int getMaxLocalEntries() {
+        return maxLocalEntries;
+    }
+
+    public void setMaxLocalEntries(int maxLocalEntries) {
+        this.maxLocalEntries = maxLocalEntries;
     }
 }
 

@@ -160,6 +160,18 @@ public class AuthorizationEvaluator implements AuthApi {
                 return decision;
             }
 
+            // Verify active membership BEFORE probing project or resource ownership
+            // so outsiders cannot enumerate whether arbitrary projects/resources belong to a tenant.
+            if (!membershipValidator.isActiveMember(userId, organizationId)) {
+                AuthorizationDecision decision = AuthorizationDecision.deny(
+                        DenialReason.MEMBERSHIP_INACTIVE,
+                        DenialReason.MEMBERSHIP_INACTIVE.getDefaultMessage()
+                );
+                recordAudit(AuthorizationAuditEventType.MEMBERSHIP_DENIAL,
+                        userId, scope, organizationId, projectId, resourceType, resourceId, Set.of(permission), decision, DenialReason.MEMBERSHIP_INACTIVE);
+                return decision;
+            }
+
             if (scope == RoleScope.PROJECT) {
                 if (projectId == null) {
                     AuthorizationDecision decision = AuthorizationDecision.deny(
@@ -181,17 +193,6 @@ public class AuthorizationEvaluator implements AuthApi {
                             userId, scope, organizationId, projectId, resourceType, resourceId, Set.of(permission), decision, DenialReason.TENANT_MISMATCH);
                     return decision;
                 }
-            }
-
-            // Verify active membership (trusted port lookup — caller attributes are never trusted)
-            if (!membershipValidator.isActiveMember(userId, organizationId)) {
-                AuthorizationDecision decision = AuthorizationDecision.deny(
-                        DenialReason.MEMBERSHIP_INACTIVE,
-                        DenialReason.MEMBERSHIP_INACTIVE.getDefaultMessage()
-                );
-                recordAudit(AuthorizationAuditEventType.MEMBERSHIP_DENIAL,
-                        userId, scope, organizationId, projectId, resourceType, resourceId, Set.of(permission), decision, DenialReason.MEMBERSHIP_INACTIVE);
-                return decision;
             }
 
             // Verify sub-resource organization boundary if known

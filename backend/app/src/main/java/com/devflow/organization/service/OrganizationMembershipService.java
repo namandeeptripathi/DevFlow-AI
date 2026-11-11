@@ -189,6 +189,9 @@ public class OrganizationMembershipService {
 
         authorizationService.requireAdminOrOwner(organizationId, callerUserId);
 
+        // Lock organization row before evaluating member state and active owner count
+        organizationRepository.findByIdForUpdate(organizationId);
+
         OrganizationMember member = organizationMemberRepository.findByOrganizationIdAndUserId(organizationId, targetUserId)
                 .orElseThrow(() -> {
                     log.warn("Remove member failed: member not found for user [{}] in organization [{}]", targetUserId, organizationId);
@@ -263,6 +266,9 @@ public class OrganizationMembershipService {
         Objects.requireNonNull(callerUserId, "callerUserId must not be null");
 
         authorizationService.requireOwner(organizationId, callerUserId);
+
+        // Lock organization row before evaluating member role and active owner count
+        organizationRepository.findByIdForUpdate(organizationId);
 
         OrganizationMember member = organizationMemberRepository.findByOrganizationIdAndUserId(organizationId, targetUserId)
                 .orElseThrow(() -> {

@@ -173,6 +173,7 @@ public class RoleAssignmentService {
 
         Organization org = organizationRepository.findById(organizationId)
                 .orElseThrow(() -> new OrganizationNotFoundException("Organization not found: " + organizationId));
+        organizationRepository.findByIdForUpdate(organizationId);
 
         User targetUser = userRepository.findById(targetUserId)
                 .orElseThrow(() -> new UserProfileNotFoundException("Target user not found: " + targetUserId));
@@ -322,6 +323,9 @@ public class RoleAssignmentService {
 
         User revokedByUser = userRepository.findById(revokedByUserId)
                 .orElseThrow(() -> new UserProfileNotFoundException("Revoked-by user not found: " + revokedByUserId));
+
+        // Serialize concurrent role revocations / last-owner checks within the same tenant
+        organizationRepository.findByIdForUpdate(organizationId);
 
         // ── Authorization Checks for revokedByUserId (ADR-001 §2.1, Stage 4.1 §4) ─
         Set<Role> callerRoles = getActiveOrganizationRoles(organizationId, revokedByUserId);
@@ -518,6 +522,7 @@ public class RoleAssignmentService {
 
         Organization org = organizationRepository.findById(organizationId)
                 .orElseThrow(() -> new OrganizationNotFoundException("Organization not found: " + organizationId));
+        organizationRepository.findByIdForUpdate(organizationId);
 
         User targetUser = userRepository.findById(targetUserId)
                 .orElseThrow(() -> new UserProfileNotFoundException("Target user not found: " + targetUserId));
@@ -764,6 +769,7 @@ public class RoleAssignmentService {
 
         Organization org = organizationRepository.findById(organizationId)
                 .orElseThrow(() -> new OrganizationNotFoundException("Organization not found: " + organizationId));
+        organizationRepository.findByIdForUpdate(organizationId);
 
         User targetUser = userRepository.findById(targetUserId)
                 .orElseThrow(() -> new UserProfileNotFoundException("Target user not found: " + targetUserId));

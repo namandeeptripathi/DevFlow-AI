@@ -16,10 +16,12 @@ import com.devflow.organization.exception.OrganizationNotFoundException;
 import com.devflow.organization.repository.OrganizationInvitationRepository;
 import com.devflow.organization.repository.OrganizationMemberRepository;
 import com.devflow.organization.repository.OrganizationRepository;
+import com.devflow.security.authorization.cache.AuthorizationCacheService;
 import com.devflow.user.domain.User;
 import com.devflow.user.repository.UserRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -65,6 +67,13 @@ public class OrganizationInvitationService {
     private final OrganizationMemberRepository organizationMemberRepository;
     private final UserRepository userRepository;
     private final OrganizationAuthorizationService authorizationService;
+
+    @Autowired(required = false)
+    private AuthorizationCacheService cacheService;
+
+    public void setCacheService(AuthorizationCacheService cacheService) {
+        this.cacheService = cacheService;
+    }
 
     public OrganizationInvitationService(
             OrganizationInvitationRepository organizationInvitationRepository,
@@ -241,6 +250,10 @@ public class OrganizationInvitationService {
         invitation.setStatus(OrganizationInvitationStatus.ACCEPTED);
         invitation.setAcceptedAt(Instant.now());
         organizationInvitationRepository.save(invitation);
+
+        if (cacheService != null) {
+            cacheService.evictUser(orgId, authenticatedUserId);
+        }
 
         log.info("User [{}] successfully accepted invitation [{}] for organization [{}] with role [{}]",
                 authenticatedUserId, invitation.getId(), orgId, invitation.getRole());

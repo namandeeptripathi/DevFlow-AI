@@ -14,20 +14,24 @@ import com.devflow.security.monitoring.dto.SecurityAlertResponse;
 import com.devflow.security.monitoring.exception.InvalidSecurityOperationException;
 import com.devflow.security.monitoring.exception.SecurityAlertNotFoundException;
 import com.devflow.security.monitoring.repository.SecurityAlertRepository;
+import jakarta.persistence.EntityManager;
+import jakarta.persistence.PersistenceContext;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
-import org.springframework.data.jpa.domain.Specification;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * Service managing the security alert lifecycle, deduplication, and investigation state transitions.
@@ -40,6 +44,10 @@ public class SecurityAlertService {
     private final SecurityAlertRepository alertRepository;
     private final SecurityMonitoringProperties properties;
     private final AuthorizationAuditRecorder auditRecorder;
+    private final Map<String, Object> localDedupLocks = new ConcurrentHashMap<>();
+
+    @PersistenceContext
+    private EntityManager entityManager;
 
     public SecurityAlertService(
             SecurityAlertRepository alertRepository,
@@ -61,6 +69,28 @@ public class SecurityAlertService {
         String orgId = event.getOrganizationId();
         String ruleId = event.getRuleId();
         String actorId = event.getActorId();
+        String lockName = "devflow:alert:" + orgId + ":" + ruleId + ":" + actorId;
+
+        if (entityManager != null && TransactionSynchronizationManager.isActualTransactionActive()) {
+            entityManager.createNativeQuery(
+                            "SELECT 1 FROM (SELECT pg_advisory_xact_lock(hashtextextended(:lockName, 0))) AS _lock")
+                    .setParameter("lockName", lockName)
+                    .getSingleResult();
+            return processSecurityEventInternal(event, orgId, ruleId, actorId);
+        }
+
+        Object lock = localDedupLocks.computeIfAbsent(lockName, k -> new Object());
+        synchronized (lock) {
+            return processSecurityEventInternal(event, orgId, ruleId, actorId);
+        }
+    }
+
+    private SecurityAlertEntity processSecurityEventInternal(
+            SecurityEventEntity event,
+            String orgId,
+            String ruleId,
+            String actorId
+    ) {
         Instant cooldownThreshold = Instant.now().minus(properties.getAlertCooldownMinutes(), ChronoUnit.MINUTES);
 
         Optional<SecurityAlertEntity> activeAlertOpt = alertRepository
@@ -75,7 +105,11 @@ public class SecurityAlertService {
 
             log.info("Deduplicated security event [{}] into alert [{}] for rule [{}] (total occurrences: {})",
                     event.getId(), existingAlert.getId(), ruleId, existingAlert.getOccurrenceCount());
-            return alertRepository.save(existingAlert);
+            SecurityAlertEntity saved = alertRepository.save(existingAlert);
+            if (entityManager != null && TransactionSynchronizationManager.isActualTransactionActive()) {
+                entityManager.flush();
+            }
+            return saved;
         }
 
         SecurityAlertEntity newAlert = SecurityAlertEntity.builder()
@@ -98,7 +132,11 @@ public class SecurityAlertService {
 
         log.warn("Created new security alert [{}] for tenant [{}] rule [{}] actor [{}] severity [{}]",
                 newAlert.getId(), orgId, ruleId, actorId, newAlert.getSeverity());
-        return alertRepository.save(newAlert);
+        SecurityAlertEntity saved = alertRepository.save(newAlert);
+        if (entityManager != null && TransactionSynchronizationManager.isActualTransactionActive()) {
+            entityManager.flush();
+        }
+        return saved;
     }
 
     /**
@@ -201,27 +239,9 @@ public class SecurityAlertService {
     ) {
         Objects.requireNonNull(organizationId, "organizationId must not be null");
 
-        String orgIdStr = organizationId.toString();
-        Specification<SecurityAlertEntity> spec = (root, query, cb) -> {
-            java.util.List<jakarta.persistence.criteria.Predicate> predicates = new java.util.ArrayList<>();
-            predicates.add(cb.equal(root.get("organizationId"), orgIdStr));
-            if (status != null) {
-                predicates.add(cb.equal(root.get("status"), status));
-            }
-            if (severity != null) {
-                predicates.add(cb.equal(root.get("severity"), severity));
-            }
-            if (from != null) {
-                predicates.add(cb.greaterThanOrEqualTo(root.get("lastSeenAt"), from));
-            }
-            if (to != null) {
-                predicates.add(cb.lessThanOrEqualTo(root.get("lastSeenAt"), to));
-            }
-            query.orderBy(cb.desc(root.get("lastSeenAt")));
-            return cb.and(predicates.toArray(new jakarta.persistence.criteria.Predicate[0]));
-        };
-
-        return alertRepository.findAll(spec, pageable).map(SecurityAlertResponse::fromEntity);
+        return alertRepository.findTenantSecurityAlerts(
+                organizationId.toString(), status, severity, from, to, pageable)
+                .map(SecurityAlertResponse::fromEntity);
     }
 
     /**

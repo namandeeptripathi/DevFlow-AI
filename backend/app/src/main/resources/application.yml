@@ -175,6 +175,12 @@ devflow:
       access-token-expiration: 900000
       # Refresh token lifetime: 7 days (604,800,000 milliseconds) per Authentication Strategy §6.2
       refresh-token-expiration: 604800000
+    audit:
+      # HMAC-SHA256 secret key for signing audit integrity checkpoints (minimum 32 bytes).
+      # Override in production via DEVFLOW_AUDIT_INTEGRITY_KEY.
+      integrity-key: ${DEVFLOW_AUDIT_INTEGRITY_KEY:devflow-audit-default-secret-key-32-bytes-minimum!}
+      # Bounded in-memory event buffer for tests/diagnostics (disabled in prod by setting 0).
+      in-memory-buffer-size: ${DEVFLOW_AUDIT_BUFFER_SIZE:1000}
     cors:
       # allowed-origins is intentionally empty in the base configuration.
       # Each environment MUST provide its own explicit list via its profile YAML.

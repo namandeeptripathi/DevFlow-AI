@@ -17,8 +17,10 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.time.Instant;
+import java.util.HashMap;
 import java.util.HexFormat;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.UUID;
 
@@ -165,14 +167,15 @@ public class AuditIntegrityService {
         Objects.requireNonNull(organizationId, "organizationId must not be null");
 
         String orgIdStr = organizationId.toString();
+        boolean fullChainCheck = (from == null && to == null);
         List<AuthorizationAuditEventEntity> records;
-        if (from != null && to != null) {
+        if (!fullChainCheck) {
             records = auditEventRepository.findByOrganizationIdAndTimestampBetweenOrderBySequenceNumberAsc(orgIdStr, from, to);
         } else {
             records = auditEventRepository.findByOrganizationIdOrderBySequenceNumberAsc(orgIdStr);
         }
 
-        return verifyRecordsChain(records, orgIdStr);
+        return verifyRecordsChain(records, orgIdStr, fullChainCheck);
     }
 
     /**
@@ -183,18 +186,34 @@ public class AuditIntegrityService {
         Objects.requireNonNull(organizationId, "organizationId must not be null");
 
         String orgIdStr = organizationId.toString();
+        boolean fullChainCheck = (fromSeq == null && toSeq == null);
         List<AuthorizationAuditEventEntity> records;
-        if (fromSeq != null && toSeq != null) {
+        if (!fullChainCheck) {
             records = auditEventRepository.findByOrganizationIdAndSequenceNumberBetweenOrderBySequenceNumberAsc(orgIdStr, fromSeq, toSeq);
         } else {
             records = auditEventRepository.findByOrganizationIdOrderBySequenceNumberAsc(orgIdStr);
         }
 
-        return verifyRecordsChain(records, orgIdStr);
+        return verifyRecordsChain(records, orgIdStr, fullChainCheck);
     }
 
-    private AuditIntegrityVerificationResponse verifyRecordsChain(List<AuthorizationAuditEventEntity> records, String organizationId) {
+    private AuditIntegrityVerificationResponse verifyRecordsChain(
+            List<AuthorizationAuditEventEntity> records,
+            String organizationId,
+            boolean fullChainCheck
+    ) {
         if (records.isEmpty()) {
+            AuditIntegrityCheckpointEntity latestCheckpoint = fullChainCheck
+                    ? checkpointRepository.findTopByOrganizationIdOrderByEndSequenceDesc(organizationId).orElse(null)
+                    : null;
+            if (latestCheckpoint != null) {
+                String detail = String.format(
+                        "Audit records missing for organization [%s] despite integrity checkpoint [%s] ending at sequence [%d]",
+                        organizationId, latestCheckpoint.getId(), latestCheckpoint.getEndSequence());
+                log.warn("AUDIT_INTEGRITY_TAMPER: {}", detail);
+                return buildTamperedResponse(0L, detail, null, null, null);
+            }
+
             return AuditIntegrityVerificationResponse.builder()
                     .valid(true)
                     .tampered(false)
@@ -209,8 +228,12 @@ public class AuditIntegrityService {
         Instant verifiedFrom = records.get(0).getTimestamp();
         Instant verifiedTo = records.get(records.size() - 1).getTimestamp();
         long count = 0;
-        String expectedPreviousHash = records.get(0).getPreviousRecordHash();
-        long expectedSequence = records.get(0).getSequenceNumber();
+
+        AuthorizationAuditEventEntity firstRecord = records.get(0);
+        boolean startsAtGenesis = fullChainCheck || firstRecord.getSequenceNumber() == 1L;
+        String expectedPreviousHash = startsAtGenesis ? GENESIS_HASH : firstRecord.getPreviousRecordHash();
+        long expectedSequence = fullChainCheck ? 1L : firstRecord.getSequenceNumber();
+        Map<Long, AuthorizationAuditEventEntity> recordsBySeq = new HashMap<>(records.size());
 
         for (AuthorizationAuditEventEntity record : records) {
             count++;
@@ -240,30 +263,74 @@ public class AuditIntegrityService {
                 return buildTamperedResponse(count, detail, record.getRecordHash(), verifiedFrom, verifiedTo);
             }
 
+            recordsBySeq.put(record.getSequenceNumber(), record);
             expectedPreviousHash = record.getRecordHash();
             expectedSequence++;
         }
 
-        // 4. Verify any checkpoints within range
-        long startSeq = records.get(0).getSequenceNumber();
+        // 4. Verify any checkpoints within range (and detect tail truncation against latest checkpoint)
+        long startSeq = firstRecord.getSequenceNumber();
         long endSeq = records.get(records.size() - 1).getSequenceNumber();
         List<AuditIntegrityCheckpointEntity> checkpoints = checkpointRepository
                 .findByOrganizationIdAndStartSequenceGreaterThanEqualAndEndSequenceLessThanEqualOrderByEndSequenceAsc(
                         organizationId, startSeq, endSeq);
 
-        int checkpointsVerified = 0;
-        for (AuditIntegrityCheckpointEntity cp : checkpoints) {
-            String recomputedHmac = computeCheckpointHmac(
-                    cp.getOrganizationId(), cp.getStartSequence(), cp.getEndSequence(),
-                    cp.getRecordCount(), cp.getCumulativeHash());
-
-            if (!Objects.equals(cp.getHmacSignature(), recomputedHmac)) {
-                String detail = String.format("Checkpoint HMAC verification failed for checkpoint ID [%s] over range [%d-%d]",
-                        cp.getId(), cp.getStartSequence(), cp.getEndSequence());
+        if (fullChainCheck) {
+            AuditIntegrityCheckpointEntity latestCheckpoint = checkpointRepository
+                    .findTopByOrganizationIdOrderByEndSequenceDesc(organizationId)
+                    .orElse(null);
+            if (latestCheckpoint != null && latestCheckpoint.getEndSequence() > endSeq) {
+                String detail = String.format(
+                        "Audit ledger truncated: latest record sequence is [%d] but checkpoint [%s] requires sequence [%d]",
+                        endSeq, latestCheckpoint.getId(), latestCheckpoint.getEndSequence());
                 log.warn("AUDIT_INTEGRITY_TAMPER: {}", detail);
                 return buildTamperedResponse(count, detail, expectedPreviousHash, verifiedFrom, verifiedTo);
             }
-            checkpointsVerified++;
+        }
+
+        int checkpointsVerified = 0;
+        if (checkpoints != null) {
+            for (AuditIntegrityCheckpointEntity cp : checkpoints) {
+                String recomputedHmac = computeCheckpointHmac(
+                        cp.getOrganizationId(), cp.getStartSequence(), cp.getEndSequence(),
+                        cp.getRecordCount(), cp.getCumulativeHash());
+
+                byte[] storedHmacBytes = cp.getHmacSignature() != null
+                        ? cp.getHmacSignature().getBytes(StandardCharsets.UTF_8) : null;
+                byte[] computedHmacBytes = recomputedHmac.getBytes(StandardCharsets.UTF_8);
+
+                if (storedHmacBytes == null || !MessageDigest.isEqual(storedHmacBytes, computedHmacBytes)) {
+                    String detail = String.format("Checkpoint HMAC verification failed for checkpoint ID [%s] over range [%d-%d]",
+                            cp.getId(), cp.getStartSequence(), cp.getEndSequence());
+                    log.warn("AUDIT_INTEGRITY_TAMPER: {}", detail);
+                    return buildTamperedResponse(count, detail, expectedPreviousHash, verifiedFrom, verifiedTo);
+                }
+
+                long expectedRangeCount = cp.getEndSequence() - cp.getStartSequence() + 1L;
+                if (cp.getRecordCount() != expectedRangeCount) {
+                    String detail = String.format("Checkpoint ID [%s] recordCount [%d] does not match sequence range [%d-%d]",
+                            cp.getId(), cp.getRecordCount(), cp.getStartSequence(), cp.getEndSequence());
+                    log.warn("AUDIT_INTEGRITY_TAMPER: {}", detail);
+                    return buildTamperedResponse(count, detail, expectedPreviousHash, verifiedFrom, verifiedTo);
+                }
+
+                AuthorizationAuditEventEntity endRecord = recordsBySeq.get(cp.getEndSequence());
+                if (endRecord == null) {
+                    String detail = String.format("Audit record missing for checkpoint ID [%s] end sequence [%d] (possible tail truncation)",
+                            cp.getId(), cp.getEndSequence());
+                    log.warn("AUDIT_INTEGRITY_TAMPER: {}", detail);
+                    return buildTamperedResponse(count, detail, expectedPreviousHash, verifiedFrom, verifiedTo);
+                }
+
+                if (!Objects.equals(endRecord.getRecordHash(), cp.getCumulativeHash())) {
+                    String detail = String.format("Checkpoint ID [%s] cumulative hash mismatch at sequence [%d]: checkpoint [%s] vs record [%s]",
+                            cp.getId(), cp.getEndSequence(), cp.getCumulativeHash(), endRecord.getRecordHash());
+                    log.warn("AUDIT_INTEGRITY_TAMPER: {}", detail);
+                    return buildTamperedResponse(count, detail, expectedPreviousHash, verifiedFrom, verifiedTo);
+                }
+
+                checkpointsVerified++;
+            }
         }
 
         return AuditIntegrityVerificationResponse.builder()

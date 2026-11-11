@@ -44,6 +44,10 @@ public class JwtTokenProvider {
 
     private static final Logger log = LoggerFactory.getLogger(JwtTokenProvider.class);
 
+    public static final String CLAIM_TOKEN_TYPE = "token_type";
+    public static final String TOKEN_TYPE_ACCESS = "access";
+    public static final String TOKEN_TYPE_REFRESH = "refresh";
+
     private final JwtProperties jwtProperties;
     private final JwtClaimsFactory jwtClaimsFactory;
     private final SecretKey secretKey;
@@ -72,7 +76,7 @@ public class JwtTokenProvider {
      * @return signed access token string
      */
     public String generateAccessToken(UserDetails userDetails, java.util.UUID organizationId) {
-        return buildToken(userDetails, organizationId, jwtProperties.getAccessTokenExpiration());
+        return buildToken(userDetails, organizationId, jwtProperties.getAccessTokenExpiration(), TOKEN_TYPE_ACCESS);
     }
 
     /**
@@ -82,27 +86,28 @@ public class JwtTokenProvider {
      * @return signed refresh token string
      */
     public String generateRefreshToken(UserDetails userDetails) {
-        return buildToken(userDetails, null, jwtProperties.getRefreshTokenExpiration());
+        return buildToken(userDetails, null, jwtProperties.getRefreshTokenExpiration(), TOKEN_TYPE_REFRESH);
     }
 
-    private String buildToken(UserDetails userDetails, java.util.UUID organizationId, long expirationMs) {
+    private String buildToken(UserDetails userDetails, java.util.UUID organizationId, long expirationMs, String tokenType) {
         Objects.requireNonNull(userDetails, "userDetails must not be null");
 
         Date now = new Date();
         Date expiryDate = new Date(now.getTime() + expirationMs);
 
         return Jwts.builder()
+                .claims(jwtClaimsFactory.createClaims(userDetails, organizationId))
+                .claim(CLAIM_TOKEN_TYPE, tokenType)
                 .subject(userDetails.getUsername())
                 .issuer(jwtProperties.getIssuer())
                 .issuedAt(now)
                 .expiration(expiryDate)
-                .claims(jwtClaimsFactory.createClaims(userDetails, organizationId))
                 .signWith(secretKey, Jwts.SIG.HS512)
                 .compact();
     }
 
     /**
-     * Validates signature, structural integrity, and expiration of a JWT token.
+     * Validates signature, structural integrity, issuer, and expiration of a JWT token.
      *
      * @param token the JWT string to validate
      * @return {@code true} if token is valid and unexpired; {@code false} otherwise
@@ -113,10 +118,7 @@ public class JwtTokenProvider {
         }
 
         try {
-            Jwts.parser()
-                    .verifyWith(secretKey)
-                    .build()
-                    .parseSignedClaims(token.trim());
+            extractClaims(token);
             return true;
         } catch (ExpiredJwtException e) {
             log.debug("JWT token has expired: {}", e.getMessage());
@@ -132,6 +134,28 @@ public class JwtTokenProvider {
             log.debug("Invalid JWT token: {}", e.getMessage());
         }
         return false;
+    }
+
+    /**
+     * Validates that the token is structurally valid, properly signed, unexpired, and not a refresh token.
+     */
+    public boolean validateAccessToken(String token) {
+        return validateToken(token) && !isRefreshToken(token);
+    }
+
+    /**
+     * Returns {@code true} if the token carries {@code token_type = "refresh"}.
+     */
+    public boolean isRefreshToken(String token) {
+        if (token == null || token.trim().isEmpty()) {
+            return false;
+        }
+        try {
+            Claims claims = extractClaims(token);
+            return TOKEN_TYPE_REFRESH.equals(claims.get(CLAIM_TOKEN_TYPE));
+        } catch (JwtException | IllegalArgumentException e) {
+            return false;
+        }
     }
 
     /**
@@ -215,8 +239,11 @@ public class JwtTokenProvider {
      * @throws JwtException if the token cannot be parsed or verified
      */
     public Claims extractClaims(String token) {
-        return Jwts.parser()
-                .verifyWith(secretKey)
+        var parserBuilder = Jwts.parser().verifyWith(secretKey);
+        if (jwtProperties.getIssuer() != null && !jwtProperties.getIssuer().isBlank()) {
+            parserBuilder.requireIssuer(jwtProperties.getIssuer());
+        }
+        return parserBuilder
                 .build()
                 .parseSignedClaims(token.trim())
                 .getPayload();

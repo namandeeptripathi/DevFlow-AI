@@ -5,6 +5,7 @@ import com.devflow.audit.dto.AuditLogResponse;
 import com.devflow.audit.service.AuditIntegrityService;
 import com.devflow.audit.service.AuthorizationAuditService;
 import com.devflow.modules.auth.api.AuthorizationDecision;
+import com.devflow.modules.auth.api.DenialReason;
 import com.devflow.modules.auth.audit.AuthorizationAuditEvent;
 import com.devflow.modules.auth.audit.AuthorizationAuditEventType;
 import com.devflow.modules.auth.audit.AuthorizationAuditRecorder;
@@ -61,6 +62,8 @@ import java.util.UUID;
 @Tag(name = "Security Monitoring", description = "Endpoints for authorization audit logs, cryptographic integrity, and security alert management")
 public class OrganizationSecurityMonitoringController {
 
+    private static final int MAX_PAGE_SIZE = 100;
+
     private final AuthorizationAuditService auditService;
     private final AuditIntegrityService integrityService;
     private final SecurityMonitoringService monitoringService;
@@ -102,7 +105,7 @@ public class OrganizationSecurityMonitoringController {
     ) {
         verifyCallerIsAdminOrOwner(organizationId, userDetails);
         Page<AuditLogResponse> logs = auditService.searchAuditLogs(
-                organizationId, eventType, userId, targetId, decision, from, to, PageRequest.of(page, size)
+                organizationId, eventType, userId, targetId, decision, from, to, safePageRequest(page, size)
         );
         return ResponseEntity.ok(logs);
     }
@@ -170,7 +173,7 @@ public class OrganizationSecurityMonitoringController {
     ) {
         verifyCallerIsAdminOrOwner(organizationId, userDetails);
         Page<SecurityEventResponse> events = monitoringService.getSecurityEvents(
-                organizationId, ruleId, severity, from, to, PageRequest.of(page, size)
+                organizationId, ruleId, severity, from, to, safePageRequest(page, size)
         );
         return ResponseEntity.ok(events);
     }
@@ -203,7 +206,7 @@ public class OrganizationSecurityMonitoringController {
     ) {
         verifyCallerIsAdminOrOwner(organizationId, userDetails);
         Page<SecurityAlertResponse> alerts = alertService.getAlerts(
-                organizationId, status, severity, from, to, PageRequest.of(page, size)
+                organizationId, status, severity, from, to, safePageRequest(page, size)
         );
         return ResponseEntity.ok(alerts);
     }
@@ -247,7 +250,13 @@ public class OrganizationSecurityMonitoringController {
         return ResponseEntity.ok(response);
     }
 
-    // ── Helper ────────────────────────────────────────────────────────────────
+    // ── Helpers ───────────────────────────────────────────────────────────────
+
+    private PageRequest safePageRequest(int page, int size) {
+        int safePage = Math.max(0, page);
+        int safeSize = Math.min(Math.max(1, size), MAX_PAGE_SIZE);
+        return PageRequest.of(safePage, safeSize);
+    }
 
     private void verifyCallerIsAdminOrOwner(UUID organizationId, DevFlowUserDetails userDetails) {
         if (userDetails == null || userDetails.getId() == null) {
@@ -261,6 +270,23 @@ public class OrganizationSecurityMonitoringController {
         );
 
         if (!callerRoles.contains(Role.ORGANIZATION_OWNER) && !callerRoles.contains(Role.ORGANIZATION_ADMIN)) {
+            if (auditRecorder != null) {
+                try {
+                    auditRecorder.record(AuthorizationAuditEvent.builder()
+                            .eventType(AuthorizationAuditEventType.AUTHORIZATION_DENIED)
+                            .userId(callerUserId)
+                            .scope(RoleScope.ORGANIZATION)
+                            .organizationId(organizationId)
+                            .resourceType("SECURITY_MONITORING")
+                            .reason("Unauthorized access attempt to tenant security monitoring")
+                            .decision(AuthorizationDecision.deny(
+                                    DenialReason.INSUFFICIENT_PERMISSIONS,
+                                    "Caller lacks ORGANIZATION_OWNER or ORGANIZATION_ADMIN role"))
+                            .build());
+                } catch (Exception ignored) {
+                    // Never mask access denial if non-admin evaluation audit fails
+                }
+            }
             throw new SecurityMonitoringAccessDeniedException(
                     "User [" + callerUserId + "] is not authorized to access security monitoring in organization [" + organizationId + "]"
             );

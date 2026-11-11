@@ -202,11 +202,11 @@ public class CustomRoleService {
         Objects.requireNonNull(organizationId, "organizationId must not be null");
         Objects.requireNonNull(callerUserId, "callerUserId must not be null");
 
+        verifyCallerIsAdminOrOwner(organizationId, callerUserId);
+
         if (!organizationRepository.existsById(organizationId)) {
             throw new OrganizationNotFoundException("Organization not found: " + organizationId);
         }
-
-        verifyCallerIsAdminOrOwner(organizationId, callerUserId);
 
         List<CustomRoleEntity> roles = customRoleRepository.findByOrganizationIdWithPermissions(organizationId);
         if (Boolean.TRUE.equals(activeOnly)) {
@@ -230,13 +230,13 @@ public class CustomRoleService {
         Objects.requireNonNull(callerUserId, "callerUserId must not be null");
         Objects.requireNonNull(request, "request must not be null");
 
+        // Verify caller authorization before probing role existence to prevent cross-tenant enumeration
+        verifyCallerIsAdminOrOwner(organizationId, callerUserId);
+
         CustomRoleEntity role = customRoleRepository.findByIdAndOrganizationIdWithPermissions(roleId, organizationId)
                 .orElseThrow(() -> new CustomRoleNotFoundException(
                         "Custom role [" + roleId + "] not found in organization [" + organizationId + "]"
                 ));
-
-        // Verify caller is admin or owner
-        verifyCallerIsAdminOrOwner(organizationId, callerUserId);
 
         if (request.getDisplayName() != null && !request.getDisplayName().isBlank()) {
             role.setDisplayName(request.getDisplayName().trim());
@@ -330,12 +330,13 @@ public class CustomRoleService {
         Objects.requireNonNull(roleId, "roleId must not be null");
         Objects.requireNonNull(callerUserId, "callerUserId must not be null");
 
+        // Verify caller authorization before probing role existence to prevent cross-tenant enumeration
+        verifyCallerIsAdminOrOwner(organizationId, callerUserId);
+
         CustomRoleEntity role = customRoleRepository.findByIdAndOrganizationIdWithPermissions(roleId, organizationId)
                 .orElseThrow(() -> new CustomRoleNotFoundException(
                         "Custom role [" + roleId + "] not found in organization [" + organizationId + "]"
                 ));
-
-        verifyCallerIsAdminOrOwner(organizationId, callerUserId);
 
         // 1. Prevent deletion if active assignments exist
         Instant now = Instant.now();

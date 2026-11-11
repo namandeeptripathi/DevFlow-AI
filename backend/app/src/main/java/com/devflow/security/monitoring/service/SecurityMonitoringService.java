@@ -13,7 +13,6 @@ import org.slf4j.LoggerFactory;
 import org.springframework.context.event.EventListener;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
-import org.springframework.data.jpa.domain.Specification;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -91,27 +90,9 @@ public class SecurityMonitoringService {
     ) {
         Objects.requireNonNull(organizationId, "organizationId must not be null");
 
-        String orgIdStr = organizationId.toString();
-        Specification<SecurityEventEntity> spec = (root, query, cb) -> {
-            java.util.List<jakarta.persistence.criteria.Predicate> predicates = new java.util.ArrayList<>();
-            predicates.add(cb.equal(root.get("organizationId"), orgIdStr));
-            if (ruleId != null && !ruleId.isBlank()) {
-                predicates.add(cb.equal(root.get("ruleId"), ruleId.trim()));
-            }
-            if (severity != null) {
-                predicates.add(cb.equal(root.get("severity"), severity));
-            }
-            if (from != null) {
-                predicates.add(cb.greaterThanOrEqualTo(root.get("detectedAt"), from));
-            }
-            if (to != null) {
-                predicates.add(cb.lessThanOrEqualTo(root.get("detectedAt"), to));
-            }
-            query.orderBy(cb.desc(root.get("detectedAt")));
-            return cb.and(predicates.toArray(new jakarta.persistence.criteria.Predicate[0]));
-        };
-
-        return eventRepository.findAll(spec, pageable).map(SecurityEventResponse::fromEntity);
+        return eventRepository.findTenantSecurityEvents(
+                organizationId.toString(), ruleId, severity, from, to, pageable)
+                .map(SecurityEventResponse::fromEntity);
     }
 
     /**
