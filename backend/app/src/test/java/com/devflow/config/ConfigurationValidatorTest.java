@@ -3,11 +3,18 @@ package com.devflow.config;
 import com.devflow.security.jwt.JwtProperties;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.springframework.boot.context.properties.EnableConfigurationProperties;
+import org.springframework.boot.test.context.ConfigDataApplicationContextInitializer;
+import org.springframework.boot.test.context.runner.ApplicationContextRunner;
+import org.springframework.context.annotation.Configuration;
+import org.springframework.core.env.SystemEnvironmentPropertySource;
 import org.springframework.mock.env.MockEnvironment;
 
 import java.util.Arrays;
 import java.util.List;
+import java.util.Map;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -178,6 +185,81 @@ class ConfigurationValidatorTest {
         );
 
         assertThatCode(validator::validate).doesNotThrowAnyException();
+    }
+
+    @Test
+    @DisplayName("application-prod.yml binds safely with no CORS env var set and hardens prod flags")
+    void prodProfileBindsSafelyWithoutCorsEnvVar() {
+        prodContextRunner(Map.of()).run(context -> {
+            assertThat(context).hasNotFailed();
+            SecurityProperties sec = context.getBean(SecurityProperties.class);
+            assertThat(sec.getCors().getAllowedOrigins()).isEmpty();
+            ConfigurationValidator validator = context.getBean(ConfigurationValidator.class);
+            assertThatCode(validator::validate).doesNotThrowAnyException();
+
+            org.springframework.core.env.Environment env = context.getEnvironment();
+            assertThat(env.getProperty("spring.data.redis.ssl.enabled", Boolean.class)).isTrue();
+            assertThat(env.getProperty("spring.jpa.show-sql", Boolean.class)).isFalse();
+            assertThat(env.getProperty("spring.flyway.validate-on-migrate", Boolean.class)).isTrue();
+            assertThat(env.getProperty("spring.flyway.out-of-order", Boolean.class)).isFalse();
+            assertThat(env.getProperty("spring.flyway.baseline-on-migrate", Boolean.class)).isFalse();
+            assertThat(env.getProperty("springdoc.api-docs.enabled", Boolean.class)).isFalse();
+            assertThat(env.getProperty("springdoc.swagger-ui.enabled", Boolean.class)).isFalse();
+            assertThat(env.getProperty("devflow.security.audit.in-memory-buffer-size", Integer.class)).isZero();
+            assertThat(env.getProperty("management.endpoints.web.exposure.include"))
+                    .isEqualTo("health,info,metrics,prometheus");
+            assertThat(env.getProperty("management.endpoint.health.show-details"))
+                    .isEqualTo("when-authorized");
+        });
+    }
+
+    @Test
+    @DisplayName("application-prod.yml honors documented DEVFLOW_SECURITY_CORS_ALLOWED_ORIGINS and DEVFLOW_CORS_ALLOWED_ORIGINS")
+    void prodProfileHonorsDocumentedCorsEnvVars() {
+        prodContextRunner(Map.of(
+                "DEVFLOW_SECURITY_CORS_ALLOWED_ORIGINS",
+                "https://app.devflow.com,https://dashboard.devflow.com"
+        )).run(context -> {
+            assertThat(context).hasNotFailed();
+            SecurityProperties sec = context.getBean(SecurityProperties.class);
+            assertThat(sec.getCors().getAllowedOrigins())
+                    .containsExactly("https://app.devflow.com", "https://dashboard.devflow.com");
+        });
+
+        prodContextRunner(Map.of(
+                "DEVFLOW_CORS_ALLOWED_ORIGINS",
+                "https://portal.devflow.com"
+        )).run(context -> {
+            assertThat(context).hasNotFailed();
+            SecurityProperties sec = context.getBean(SecurityProperties.class);
+            assertThat(sec.getCors().getAllowedOrigins())
+                    .containsExactly("https://portal.devflow.com");
+        });
+    }
+
+    private ApplicationContextRunner prodContextRunner(Map<String, Object> envOverrides) {
+        Map<String, Object> envVars = new java.util.HashMap<>(envOverrides);
+        envVars.putIfAbsent("DEVFLOW_DB_URL", "jdbc:postgresql://localhost:5432/devflow_test");
+        envVars.putIfAbsent("DEVFLOW_DB_USERNAME", "devflow");
+        envVars.putIfAbsent("DEVFLOW_DB_PASSWORD", "devflow_secret");
+        envVars.putIfAbsent("DEVFLOW_REDIS_HOST", "localhost");
+        envVars.putIfAbsent("DEVFLOW_REDIS_PASSWORD", "redis-secret");
+        envVars.putIfAbsent("DEVFLOW_JWT_SECRET", VALID_PROD_JWT_SECRET);
+        envVars.putIfAbsent("DEVFLOW_AUDIT_INTEGRITY_KEY", VALID_PROD_AUDIT_KEY);
+
+        return new ApplicationContextRunner()
+                .withInitializer(context -> {
+                    context.getEnvironment().getPropertySources().addFirst(
+                            new SystemEnvironmentPropertySource("systemEnvironment", envVars));
+                    new ConfigDataApplicationContextInitializer().initialize(context);
+                })
+                .withPropertyValues("spring.profiles.active=prod")
+                .withUserConfiguration(ProdConfigProbe.class, ConfigurationValidator.class);
+    }
+
+    @Configuration
+    @EnableConfigurationProperties({JwtProperties.class, SecurityProperties.class})
+    static class ProdConfigProbe {
     }
 
     private ConfigurationValidator createValidator(

@@ -7,9 +7,12 @@ import com.devflow.audit.repository.AuditIntegrityCheckpointRepository;
 import com.devflow.audit.repository.AuthorizationAuditEventRepository;
 import com.devflow.audit.service.AuditIntegrityService;
 import com.devflow.audit.service.AuthorizationAuditService;
+import com.devflow.modules.auth.api.AuthApi;
 import com.devflow.modules.auth.api.AuthorizationDecision;
 import com.devflow.modules.auth.audit.AuthorizationAuditEvent;
 import com.devflow.modules.auth.audit.AuthorizationAuditEventType;
+import com.devflow.modules.auth.audit.AuthorizationAuditRecorder;
+import com.devflow.modules.auth.domain.Permission;
 import com.devflow.modules.auth.domain.Role;
 import com.devflow.modules.auth.domain.RoleScope;
 import com.devflow.modules.auth.registry.PermissionRegistry;
@@ -22,7 +25,13 @@ import com.devflow.organization.exception.LastOrganizationOwnerRemovalException;
 import com.devflow.organization.repository.OrganizationMemberRepository;
 import com.devflow.organization.repository.OrganizationRepository;
 import com.devflow.organization.service.OrganizationMembershipService;
+import com.devflow.role.domain.RoleEntity;
+import com.devflow.role.exception.InvalidRoleAssignmentException;
 import com.devflow.role.exception.RoleAssignmentAccessDeniedException;
+import com.devflow.role.exception.RoleAssignmentAlreadyExistsException;
+import com.devflow.role.exception.RoleAssignmentNotFoundException;
+import com.devflow.role.repository.OrganizationRoleAssignmentRepository;
+import com.devflow.role.repository.RoleRepository;
 import com.devflow.role.service.RoleAssignmentService;
 import com.devflow.security.authorization.cache.AuthorizationCacheService;
 import com.devflow.security.monitoring.domain.SecurityAlertEntity;
@@ -116,6 +125,18 @@ class Stage9ConcurrencyAndAuditIntegrityIntegrationTest {
 
     @Autowired
     private PlatformTransactionManager transactionManager;
+
+    @Autowired
+    private AuthApi authApi;
+
+    @Autowired
+    private AuthorizationAuditRecorder authorizationAuditRecorder;
+
+    @Autowired
+    private OrganizationRoleAssignmentRepository organizationRoleAssignmentRepository;
+
+    @Autowired
+    private RoleRepository roleRepository;
 
     private final List<UUID> createdOrgIds = Collections.synchronizedList(new ArrayList<>());
     private final List<UUID> createdUserIds = Collections.synchronizedList(new ArrayList<>());
@@ -558,6 +579,176 @@ class Stage9ConcurrencyAndAuditIntegrityIntegrationTest {
                 .organization(org).user(owner2).role(OrganizationRole.OWNER)
                 .status(OrganizationMembershipStatus.ACTIVE).build());
         return org;
+    }
+
+    @Test
+    @DisplayName("Transaction rollback prevents orphaned role mutations/audits and preserves hash chain continuity; audit failures fail closed")
+    void transactionRollbackPreservesAuditContinuityAndPreventsOrphanedMutations() {
+        User owner1 = createCommittedUser("rb-owner1");
+        User owner2 = createCommittedUser("rb-owner2");
+        User member = createCommittedUser("rb-member");
+        Organization org = createCommittedOrg(owner1, owner2);
+        organizationMemberRepository.saveAndFlush(OrganizationMember.builder()
+                .organization(org).user(member).role(OrganizationRole.DEVELOPER)
+                .status(OrganizationMembershipStatus.ACTIVE).build());
+
+        // 1. Baseline committed role grant establishes sequence 1
+        roleAssignmentService.assignOrganizationRole(
+                org.getId(), member.getId(), Role.ORGANIZATION_MEMBER, owner1.getId(), null);
+
+        List<AuthorizationAuditEventEntity> baselineEvents = auditEventRepository
+                .findByOrganizationIdOrderBySequenceNumberAsc(org.getId().toString());
+        assertThat(baselineEvents).hasSize(1);
+        assertThat(integrityService.verifyIntegrity(org.getId(), null, null).isValid()).isTrue();
+
+        // 2. Downstream exception in domain transaction rolls back both role grant AND tentative ROLE_GRANTED audit row
+        TransactionTemplate txTemplate = new TransactionTemplate(transactionManager);
+        txTemplate.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
+        assertThatThrownBy(() -> txTemplate.executeWithoutResult(status -> {
+            roleAssignmentService.assignOrganizationRole(
+                    org.getId(), member.getId(), Role.ORGANIZATION_BILLING, owner1.getId(), null);
+            throw new IllegalStateException("Simulated downstream domain failure after role grant");
+        })).isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("Simulated downstream domain failure");
+
+        assertThat(roleAssignmentService.getActiveOrganizationRoles(org.getId(), member.getId()))
+                .doesNotContain(Role.ORGANIZATION_BILLING);
+        assertThat(auditEventRepository.findByOrganizationIdOrderBySequenceNumberAsc(org.getId().toString()))
+                .hasSize(1);
+        assertThat(authApi.isAuthorized(member.getId(), org.getId(), Permission.of("billing", "manage")))
+                .isFalse();
+
+        // 3. Subsequent committed role grant receives contiguous sequence 3 (after seq 1 grant and seq 2 authz deny)
+        roleAssignmentService.assignOrganizationRole(
+                org.getId(), member.getId(), Role.ORGANIZATION_BILLING, owner1.getId(), null);
+
+        List<AuthorizationAuditEventEntity> afterRecoveryEvents = auditEventRepository
+                .findByOrganizationIdOrderBySequenceNumberAsc(org.getId().toString());
+        assertThat(afterRecoveryEvents).hasSize(3);
+        assertThat(afterRecoveryEvents.get(0).getSequenceNumber()).isEqualTo(1L);
+        assertThat(afterRecoveryEvents.get(1).getSequenceNumber()).isEqualTo(2L);
+        assertThat(afterRecoveryEvents.get(2).getSequenceNumber()).isEqualTo(3L);
+        assertThat(integrityService.verifyIntegrity(org.getId(), null, null).isValid()).isTrue();
+        assertThat(authApi.isAuthorized(member.getId(), org.getId(), Permission.of("billing", "manage")))
+                .isTrue();
+
+        // 4. Fail-closed durable audit failure during administrative mutation rolls back role grant completely
+        try {
+            roleAssignmentService.setAuditRecorder(event -> {
+                throw new IllegalStateException("Simulated durable audit storage failure");
+            });
+
+            assertThatThrownBy(() -> roleAssignmentService.assignOrganizationRole(
+                    org.getId(), member.getId(), Role.ORGANIZATION_ADMIN, owner1.getId(), null))
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining("Simulated durable audit storage failure");
+        } finally {
+            roleAssignmentService.setAuditRecorder(authorizationAuditRecorder);
+        }
+
+        assertThat(roleAssignmentService.getActiveOrganizationRoles(org.getId(), member.getId()))
+                .doesNotContain(Role.ORGANIZATION_ADMIN);
+        assertThat(auditEventRepository.findByOrganizationIdOrderBySequenceNumberAsc(org.getId().toString()))
+                .hasSize(4);
+        assertThat(integrityService.verifyIntegrity(org.getId(), null, null).isValid()).isTrue();
+    }
+
+    @Test
+    @DisplayName("Concurrent role grant and revoke race maintains DB uniqueness, AuthApi consistency, and contiguous hash chain")
+    void concurrentRoleGrantAndRevokeMaintainConsistentState() throws Exception {
+        User owner1 = createCommittedUser("race-owner1");
+        User owner2 = createCommittedUser("race-owner2");
+        User target = createCommittedUser("race-target");
+        Organization org = createCommittedOrg(owner1, owner2);
+        organizationMemberRepository.saveAndFlush(OrganizationMember.builder()
+                .organization(org).user(target).role(OrganizationRole.DEVELOPER)
+                .status(OrganizationMembershipStatus.ACTIVE).build());
+
+        RoleEntity billingRole = roleRepository.findByName(Role.ORGANIZATION_BILLING.name())
+                .orElseThrow();
+
+        int threadCount = 4;
+        int iterationsPerThread = 6;
+        ExecutorService executor = Executors.newFixedThreadPool(threadCount);
+        CountDownLatch startLatch = new CountDownLatch(1);
+        CountDownLatch doneLatch = new CountDownLatch(threadCount);
+        List<Throwable> unexpectedErrors = Collections.synchronizedList(new ArrayList<>());
+        AtomicInteger grantsSucceeded = new AtomicInteger();
+        AtomicInteger revokesSucceeded = new AtomicInteger();
+
+        for (int t = 0; t < threadCount; t++) {
+            final int workerIndex = t;
+            executor.submit(() -> {
+                try {
+                    startLatch.await();
+                    for (int i = 0; i < iterationsPerThread; i++) {
+                        boolean tryGrant = ((workerIndex + i) % 2 == 0);
+                        try {
+                            if (tryGrant) {
+                                roleAssignmentService.assignOrganizationRole(
+                                        org.getId(), target.getId(), Role.ORGANIZATION_BILLING, owner1.getId(), null);
+                                grantsSucceeded.incrementAndGet();
+                            } else {
+                                roleAssignmentService.revokeOrganizationRole(
+                                        org.getId(), target.getId(), Role.ORGANIZATION_BILLING, owner1.getId(), "Concurrent race check");
+                                revokesSucceeded.incrementAndGet();
+                            }
+                        } catch (RoleAssignmentAlreadyExistsException
+                                | InvalidRoleAssignmentException
+                                | RoleAssignmentNotFoundException expectedRace) {
+                            // Expected under serialized concurrent grant-while-active or revoke-while-inactive contention
+                        }
+                    }
+                } catch (Throwable ex) {
+                    unexpectedErrors.add(ex);
+                } finally {
+                    doneLatch.countDown();
+                }
+            });
+        }
+
+        startLatch.countDown();
+        assertThat(doneLatch.await(30, TimeUnit.SECONDS)).isTrue();
+        executor.shutdownNow();
+
+        assertThat(unexpectedErrors).isEmpty();
+        assertThat(grantsSucceeded.get()).isGreaterThan(0);
+
+        boolean activeAfterRace = organizationRoleAssignmentRepository.hasActiveAssignment(
+                org.getId(), target.getId(), billingRole.getId(), Instant.now());
+        assertThat(roleAssignmentService.getActiveOrganizationRoles(org.getId(), target.getId())
+                .contains(Role.ORGANIZATION_BILLING)).isEqualTo(activeAfterRace);
+        assertThat(authApi.isAuthorized(target.getId(), org.getId(), Permission.of("billing", "manage")))
+                .isEqualTo(activeAfterRace);
+
+        // Deterministic post-race reconciliation: end active -> check ALLOW, then revoke -> check DENY
+        if (activeAfterRace) {
+            roleAssignmentService.revokeOrganizationRole(
+                    org.getId(), target.getId(), Role.ORGANIZATION_BILLING, owner1.getId(), "Post-race reset");
+            revokesSucceeded.incrementAndGet();
+            assertThat(organizationRoleAssignmentRepository.hasActiveAssignment(
+                    org.getId(), target.getId(), billingRole.getId(), Instant.now())).isFalse();
+        }
+        assertThat(authApi.isAuthorized(target.getId(), org.getId(), Permission.of("billing", "manage")))
+                .isFalse();
+
+        roleAssignmentService.assignOrganizationRole(
+                org.getId(), target.getId(), Role.ORGANIZATION_BILLING, owner1.getId(), null);
+        assertThat(organizationRoleAssignmentRepository.hasActiveAssignment(
+                org.getId(), target.getId(), billingRole.getId(), Instant.now())).isTrue();
+        assertThat(authApi.isAuthorized(target.getId(), org.getId(), Permission.of("billing", "manage")))
+                .isTrue();
+
+        roleAssignmentService.revokeOrganizationRole(
+                org.getId(), target.getId(), Role.ORGANIZATION_BILLING, owner1.getId(), "Post-race verify deny");
+        assertThat(organizationRoleAssignmentRepository.hasActiveAssignment(
+                org.getId(), target.getId(), billingRole.getId(), Instant.now())).isFalse();
+        assertThat(authApi.isAuthorized(target.getId(), org.getId(), Permission.of("billing", "manage")))
+                .isFalse();
+
+        AuditIntegrityVerificationResponse verification = integrityService.verifyIntegrity(org.getId(), null, null);
+        assertThat(verification.isValid()).isTrue();
+        assertThat(verification.getTotalRecordsVerified()).isGreaterThanOrEqualTo(grantsSucceeded.get() + revokesSucceeded.get());
     }
 
     private List<AuthorizationAuditEventEntity> buildValidChain(AuditIntegrityService svc, String orgId, int count) {
