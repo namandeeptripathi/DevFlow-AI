@@ -20,6 +20,7 @@ import com.devflow.organization.repository.OrganizationMemberRepository;
 import com.devflow.organization.repository.OrganizationRepository;
 import com.devflow.role.domain.CustomRoleEntity;
 import com.devflow.role.dto.CreateCustomRoleRequest;
+import com.devflow.role.registry.ProjectRegistry;
 import com.devflow.role.service.CustomRoleService;
 import com.devflow.role.service.RoleAssignmentService;
 import com.devflow.security.authorization.cache.AuthorizationCacheService;
@@ -59,6 +60,9 @@ class Stage9AuthorizationBenchmarkTest {
 
     @Autowired
     private RoleAssignmentService roleAssignmentService;
+
+    @Autowired(required = false)
+    private ProjectRegistry projectRegistry;
 
     @Autowired
     private CustomRoleService customRoleService;
@@ -130,6 +134,9 @@ class Stage9AuthorizationBenchmarkTest {
         roleAssignmentService.assignOrganizationRole(org.getId(), dev.getId(), Role.ORGANIZATION_MEMBER, owner.getId(), null);
 
         UUID projectId = UUID.randomUUID();
+        if (projectRegistry != null) {
+            projectRegistry.registerProject(org.getId(), projectId);
+        }
         roleAssignmentService.assignProjectRole(org.getId(), projectId, dev.getId(), Role.PROJECT_LEAD, owner.getId(), null);
 
         CustomRoleEntity customRole = customRoleService.createCustomRole(

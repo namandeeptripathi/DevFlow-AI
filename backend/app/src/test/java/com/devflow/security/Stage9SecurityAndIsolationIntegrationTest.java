@@ -22,6 +22,7 @@ import com.devflow.organization.service.OrganizationInvitationService;
 import com.devflow.role.domain.CustomRoleEntity;
 import com.devflow.role.dto.CreateCustomRoleRequest;
 import com.devflow.role.dto.GrantRoleRequest;
+import com.devflow.role.registry.ProjectRegistry;
 import com.devflow.role.service.CustomRoleService;
 import com.devflow.role.service.RoleAssignmentService;
 import com.devflow.security.authorization.cache.AuthorizationCacheService;
@@ -131,6 +132,9 @@ class Stage9SecurityAndIsolationIntegrationTest {
 
     @Autowired
     private EntityManager entityManager;
+
+    @Autowired(required = false)
+    private ProjectRegistry projectRegistry;
 
     private User ownerA;
     private User adminA;
@@ -323,6 +327,9 @@ class Stage9SecurityAndIsolationIntegrationTest {
 
         // 4. Evaluator checks active membership BEFORE probing whether projectId belongs to orgA
         UUID projectAssignedInOrgB = UUID.randomUUID();
+        if (projectRegistry != null) {
+            projectRegistry.registerProject(orgB.getId(), projectAssignedInOrgB);
+        }
         roleAssignmentService.assignProjectRole(orgB.getId(), projectAssignedInOrgB, outsiderB.getId(), Role.PROJECT_LEAD, outsiderB.getId(), null);
         AuthorizationDecision nonMemberDecision = authApi.authorize(
                 AuthorizationRequest.project(outsiderB.getId(), orgA.getId(), projectAssignedInOrgB, PermissionRegistry.PROJECT_READ));
@@ -361,17 +368,31 @@ class Stage9SecurityAndIsolationIntegrationTest {
 
         // 2. Organization-to-Project inheritance: OWNER inherits PROJECT permissions without explicit project assignment
         UUID projectId = UUID.randomUUID();
+        if (projectRegistry != null) {
+            projectRegistry.registerProject(orgA.getId(), projectId);
+        }
         roleAssignmentService.assignProjectRole(orgA.getId(), projectId, devA.getId(), Role.PROJECT_MEMBER, ownerA.getId(), null);
         assertThat(authApi.isAuthorized(ownerA.getId(), orgA.getId(), projectId, PermissionRegistry.PROJECT_DELETE)).isTrue();
         assertThat(authApi.isAuthorized(adminA.getId(), orgA.getId(), projectId, PermissionRegistry.TASK_ASSIGN)).isTrue();
 
         // Developer requires explicit project assignment: allowed on assigned projectId, denied on unassigned project2
         UUID unassignedProjectId = UUID.randomUUID();
+        if (projectRegistry != null) {
+            projectRegistry.registerProject(orgA.getId(), unassignedProjectId);
+        }
+        roleAssignmentService.assignProjectRole(orgA.getId(), unassignedProjectId, adminA.getId(), Role.PROJECT_LEAD, ownerA.getId(), null);
         assertThat(authApi.isAuthorized(devA.getId(), orgA.getId(), projectId, PermissionRegistry.TASK_CREATE)).isTrue();
         AuthorizationDecision unassignedDecision = authApi.authorize(
                 AuthorizationRequest.project(devA.getId(), orgA.getId(), unassignedProjectId, PermissionRegistry.TASK_CREATE));
         assertThat(unassignedDecision.allowed()).isFalse();
         assertThat(unassignedDecision.denialReason()).isEqualTo(DenialReason.PROJECT_ASSIGNMENT_REQUIRED);
+
+        // Completely unrecorded project fails closed at tenant boundary (fail-closed)
+        UUID completelyUnrecorded = UUID.randomUUID();
+        AuthorizationDecision unrecordedDecision = authApi.authorize(
+                AuthorizationRequest.project(devA.getId(), orgA.getId(), completelyUnrecorded, PermissionRegistry.TASK_CREATE));
+        assertThat(unrecordedDecision.allowed()).isFalse();
+        assertThat(unrecordedDecision.denialReason()).isEqualTo(DenialReason.TENANT_MISMATCH);
 
         // 3. Composite authorization (AND semantics): fails closed if any permission missing
         assertThat(authApi.isAuthorizedAll(devA.getId(), orgA.getId(),
@@ -424,6 +445,9 @@ class Stage9SecurityAndIsolationIntegrationTest {
 
         // 6. Expired project role assignment is denied (default deny)
         UUID expiredProj = UUID.randomUUID();
+        if (projectRegistry != null) {
+            projectRegistry.registerProject(orgA.getId(), expiredProj);
+        }
         roleAssignmentService.assignProjectRole(orgA.getId(), expiredProj, devA.getId(), Role.PROJECT_LEAD, ownerA.getId(),
                 Instant.now().minusSeconds(120));
         cacheService.evictUser(orgA.getId(), devA.getId());

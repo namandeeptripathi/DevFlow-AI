@@ -10,6 +10,7 @@ import com.devflow.organization.repository.OrganizationRepository;
 import com.devflow.role.domain.ProjectRoleAssignment;
 import com.devflow.role.dto.GrantRoleRequest;
 import com.devflow.role.dto.RevokeRoleRequest;
+import com.devflow.role.registry.ProjectRegistry;
 import com.devflow.role.service.RoleAssignmentService;
 import com.devflow.security.user.DevFlowUserDetails;
 import com.devflow.user.domain.AccountStatus;
@@ -68,6 +69,9 @@ class ProjectRoleControllerIntegrationTest {
     @Autowired
     private EntityManager entityManager;
 
+    @Autowired(required = false)
+    private ProjectRegistry projectRegistry;
+
     private User ownerA;
     private User adminA;
     private User leadA;
@@ -75,6 +79,7 @@ class ProjectRoleControllerIntegrationTest {
     private User userB;
 
     private Organization orgA;
+    private Organization orgB;
     private UUID projectA1;
 
     @BeforeEach
@@ -91,12 +96,25 @@ class ProjectRoleControllerIntegrationTest {
                 .owner(ownerA)
                 .build());
 
+        orgB = organizationRepository.save(Organization.builder()
+                .name("Beta Org")
+                .slug("beta-" + UUID.randomUUID())
+                .owner(userB)
+                .build());
+
         createOrgMember(orgA, ownerA, OrganizationRole.OWNER, OrganizationMembershipStatus.ACTIVE);
         createOrgMember(orgA, adminA, OrganizationRole.ADMIN, OrganizationMembershipStatus.ACTIVE);
         createOrgMember(orgA, leadA, OrganizationRole.DEVELOPER, OrganizationMembershipStatus.ACTIVE);
         createOrgMember(orgA, devA, OrganizationRole.DEVELOPER, OrganizationMembershipStatus.ACTIVE);
 
+        createOrgMember(orgB, userB, OrganizationRole.ADMIN, OrganizationMembershipStatus.ACTIVE);
+
         projectA1 = UUID.randomUUID();
+
+        if (projectRegistry != null) {
+            projectRegistry.clear();
+            projectRegistry.registerProject(orgA.getId(), projectA1);
+        }
 
         // Assign PROJECT_LEAD in projectA1 to leadA
         roleAssignmentService.assignProjectRole(
@@ -153,6 +171,18 @@ class ProjectRoleControllerIntegrationTest {
                             .with(user(new DevFlowUserDetails(userB))))
                     .andExpect(status().isForbidden())
                     .andExpect(jsonPath("$.status").value(403));
+        }
+
+        @Test
+        @DisplayName("Listing project roles for an unassigned project returns 400 Bad Request (Fail-closed)")
+        void unassignedProject_cannotListRoles_returns400() throws Exception {
+            UUID unassignedProject = UUID.randomUUID();
+            mockMvc.perform(get("/api/v1/organizations/{orgId}/projects/{projId}/roles",
+                            orgA.getId(), unassignedProject)
+                            .with(user(new DevFlowUserDetails(ownerA))))
+                    .andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.status").value(400))
+                    .andExpect(jsonPath("$.message").value(org.hamcrest.Matchers.containsString("Tenant boundary violation")));
         }
     }
 
@@ -250,6 +280,24 @@ class ProjectRoleControllerIntegrationTest {
                     .andExpect(status().isConflict())
                     .andExpect(jsonPath("$.status").value(409));
         }
+
+        @Test
+        @DisplayName("Granting project role across organization boundary returns 400 Bad Request")
+        void crossOrgProject_grantRejected_returns400() throws Exception {
+            GrantRoleRequest request = GrantRoleRequest.builder()
+                    .userId(userB.getId())
+                    .role("PROJECT_MEMBER")
+                    .build();
+
+            mockMvc.perform(post("/api/v1/organizations/{orgId}/projects/{projId}/roles",
+                            orgB.getId(), projectA1)
+                            .with(user(new DevFlowUserDetails(userB)))
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content(objectMapper.writeValueAsString(request)))
+                    .andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.status").value(400))
+                    .andExpect(jsonPath("$.message").value(org.hamcrest.Matchers.containsString("Tenant boundary violation")));
+        }
     }
 
     // ── 3. DELETE /api/v1/organizations/{orgId}/projects/{projId}/roles/{id} ──
@@ -292,6 +340,24 @@ class ProjectRoleControllerIntegrationTest {
                             .with(user(new DevFlowUserDetails(adminA))))
                     .andExpect(status().isNotFound())
                     .andExpect(jsonPath("$.status").value(404));
+        }
+
+        @Test
+        @DisplayName("Revoking project role on unassigned project returns 400 Bad Request")
+        void unassignedProject_revokeRejected_returns400() throws Exception {
+            UUID unassignedProject = UUID.randomUUID();
+            RevokeRoleRequest request = RevokeRoleRequest.builder()
+                    .reason("Cleanup")
+                    .build();
+
+            mockMvc.perform(delete("/api/v1/organizations/{orgId}/projects/{projId}/roles/{assignmentId}",
+                            orgA.getId(), unassignedProject, UUID.randomUUID())
+                            .with(user(new DevFlowUserDetails(ownerA)))
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content(objectMapper.writeValueAsString(request)))
+                    .andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.status").value(400))
+                    .andExpect(jsonPath("$.message").value(org.hamcrest.Matchers.containsString("Tenant boundary violation")));
         }
     }
 }

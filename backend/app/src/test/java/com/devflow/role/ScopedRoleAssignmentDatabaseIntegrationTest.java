@@ -19,13 +19,17 @@ import com.devflow.organization.repository.OrganizationRepository;
 import com.devflow.role.adapter.DatabaseMembershipValidator;
 import com.devflow.role.adapter.DatabaseProjectAssignmentValidator;
 import com.devflow.role.adapter.DatabaseRoleResolver;
+import com.devflow.role.adapter.DatabaseTenantBoundaryValidator;
 import com.devflow.role.domain.OrganizationRoleAssignment;
 import com.devflow.role.domain.ProjectRoleAssignment;
 import com.devflow.role.domain.RoleEntity;
+import com.devflow.role.exception.InvalidProjectRegistrationException;
 import com.devflow.role.exception.InvalidRoleAssignmentException;
 import com.devflow.role.exception.RoleAssignmentAccessDeniedException;
 import com.devflow.role.exception.RoleAssignmentAlreadyExistsException;
 import com.devflow.modules.auth.evaluator.TenantBoundaryValidator;
+import com.devflow.role.registry.DatabaseProjectRegistry;
+import com.devflow.role.registry.ProjectRegistry;
 import com.devflow.role.repository.OrganizationRoleAssignmentRepository;
 import com.devflow.role.repository.ProjectRoleAssignmentRepository;
 import com.devflow.role.repository.RoleRepository;
@@ -42,12 +46,18 @@ import org.springframework.boot.test.autoconfigure.orm.jpa.DataJpaTest;
 import org.springframework.context.annotation.Import;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.test.context.ActiveProfiles;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionDefinition;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
+import java.util.List;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -58,7 +68,9 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
     RoleAssignmentService.class,
     DatabaseRoleResolver.class,
     DatabaseMembershipValidator.class,
-    DatabaseProjectAssignmentValidator.class
+    DatabaseProjectAssignmentValidator.class,
+    DatabaseTenantBoundaryValidator.class,
+    DatabaseProjectRegistry.class
 })
 @ActiveProfiles("test")
 @DisplayName("Scoped Role Assignment Persistence & Security Invariants Integration Tests")
@@ -66,6 +78,12 @@ class ScopedRoleAssignmentDatabaseIntegrationTest {
 
     @Autowired
     private RoleAssignmentService roleAssignmentService;
+
+    @Autowired
+    private DatabaseTenantBoundaryValidator databaseTenantBoundaryValidator;
+
+    @Autowired(required = false)
+    private ProjectRegistry projectRegistry;
 
     @Autowired
     private OrganizationRoleAssignmentRepository orgAssignmentRepository;
@@ -97,10 +115,14 @@ class ScopedRoleAssignmentDatabaseIntegrationTest {
     @Autowired
     private EntityManager entityManager;
 
+    @Autowired
+    private PlatformTransactionManager transactionManager;
+
     private User owner;
     private User adminUser;
     private User devUser;
     private User outsiderUser;
+    private User adminB;
     private Organization orgA;
     private Organization orgB;
     private UUID projectA1;
@@ -155,6 +177,17 @@ class ScopedRoleAssignmentDatabaseIntegrationTest {
         projectA1 = UUID.randomUUID();
         projectA2 = UUID.randomUUID();
 
+        if (projectRegistry != null) {
+            projectRegistry.clear();
+            projectRegistry.registerProject(orgA.getId(), projectA1);
+            projectRegistry.registerProject(orgA.getId(), projectA2);
+        }
+
+        roleAssignmentService.setTenantBoundaryValidator(databaseTenantBoundaryValidator);
+        if (projectRegistry != null) {
+            roleAssignmentService.setProjectRegistry(projectRegistry);
+        }
+
         // Establish organization memberships for Org A
         organizationMemberRepository.save(OrganizationMember.builder()
                 .organization(orgA)
@@ -182,6 +215,21 @@ class ScopedRoleAssignmentDatabaseIntegrationTest {
                 .organization(orgB)
                 .user(outsiderUser)
                 .role(OrganizationRole.DEVELOPER)
+                .status(OrganizationMembershipStatus.ACTIVE)
+                .build());
+
+        adminB = userRepository.save(User.builder()
+                .email("adminB-" + UUID.randomUUID() + "@devflow.com")
+                .username("adminB_" + UUID.randomUUID().toString().substring(0, 8))
+                .passwordHash("hashed")
+                .accountStatus(AccountStatus.ACTIVE)
+                .emailVerified(true)
+                .build());
+
+        organizationMemberRepository.save(OrganizationMember.builder()
+                .organization(orgB)
+                .user(adminB)
+                .role(OrganizationRole.ADMIN)
                 .status(OrganizationMembershipStatus.ACTIVE)
                 .build());
 
@@ -831,7 +879,431 @@ class ScopedRoleAssignmentDatabaseIntegrationTest {
             }).isInstanceOf(InvalidRoleAssignmentException.class)
               .hasMessageContaining("Tenant boundary violation");
         } finally {
-            roleAssignmentService.setTenantBoundaryValidator(null);
+            roleAssignmentService.setTenantBoundaryValidator(databaseTenantBoundaryValidator);
         }
+    }
+
+    // ── Security Tests: Implementation 2 — Fail-Closed Tenant Boundaries ────
+
+    private AuthorizationEvaluator buildDatabaseWiredEvaluator() {
+        return AuthorizationEvaluator.builder()
+                .roleResolver(databaseRoleResolver)
+                .membershipValidator(databaseMembershipValidator)
+                .projectAssignmentValidator(databaseProjectAssignmentValidator)
+                .tenantBoundaryValidator(databaseTenantBoundaryValidator)
+                .build();
+    }
+
+    @Test
+    @DisplayName("Security 1: Valid project and organization ownership authorizes successfully")
+    void shouldAuthorizeValidProjectAndOrganizationOwnership() {
+        roleAssignmentService.assignProjectRole(
+                orgA.getId(), projectA1, devUser.getId(), Role.PROJECT_MEMBER, adminUser.getId(), null);
+
+        assertThat(databaseTenantBoundaryValidator.isProjectInOrganization(orgA.getId(), projectA1)).isTrue();
+        assertThat(databaseTenantBoundaryValidator.getResourceOrganizationId("project", projectA1.toString()))
+                .contains(orgA.getId());
+
+        AuthorizationEvaluator evaluator = buildDatabaseWiredEvaluator();
+        AuthorizationDecision decision = evaluator.authorize(
+                AuthorizationRequest.project(devUser.getId(), orgA.getId(), projectA1, Permission.of("task.create")));
+
+        assertThat(decision.allowed()).isTrue();
+    }
+
+    @Test
+    @DisplayName("Security 2: Project with no role assignments strictly fails closed (default-deny)")
+    void shouldFailClosedWhenProjectHasNoRoleAssignments() {
+        UUID unassignedProject = UUID.randomUUID();
+
+        // 1. Validator must return false for unassigned project
+        assertThat(databaseTenantBoundaryValidator.isProjectInOrganization(orgA.getId(), unassignedProject)).isFalse();
+
+        // 2. Project assignment validator must fail closed
+        assertThat(databaseProjectAssignmentValidator.isAssignedToProject(owner.getId(), orgA.getId(), unassignedProject)).isFalse();
+
+        // 3. Central evaluator must deny even for organization owner
+        AuthorizationEvaluator evaluator = buildDatabaseWiredEvaluator();
+        AuthorizationDecision decision = evaluator.authorize(
+                AuthorizationRequest.project(owner.getId(), orgA.getId(), unassignedProject, Permission.of("project.read")));
+
+        assertThat(decision.allowed()).isFalse();
+        assertThat(decision.getDenialReason()).contains(DenialReason.TENANT_MISMATCH);
+    }
+
+    @Test
+    @DisplayName("Security 3: Project with no resolvable organization fails closed")
+    void shouldFailClosedWhenProjectHasNoResolvableOrganization() {
+        UUID nonExistentOrg = UUID.randomUUID();
+        UUID unrecordedProject = UUID.randomUUID();
+
+        assertThat(databaseTenantBoundaryValidator.isProjectInOrganization(nonExistentOrg, projectA1)).isFalse();
+        assertThat(databaseTenantBoundaryValidator.getResourceOrganizationId("project", unrecordedProject.toString())).isEmpty();
+        assertThat(databaseTenantBoundaryValidator.getResourceOrganizationId("organization", nonExistentOrg.toString())).isEmpty();
+    }
+
+    @Test
+    @DisplayName("Security 4: User belonging to another organization is denied project access")
+    void shouldDenyAccessWhenUserBelongsToAnotherOrganization() {
+        roleAssignmentService.assignProjectRole(
+                orgA.getId(), projectA1, devUser.getId(), Role.PROJECT_MEMBER, adminUser.getId(), null);
+
+        AuthorizationEvaluator evaluator = buildDatabaseWiredEvaluator();
+        // outsiderUser belongs to orgB, attempts to access orgA's projectA1 under orgA context
+        AuthorizationDecision decision = evaluator.authorize(
+                AuthorizationRequest.project(outsiderUser.getId(), orgA.getId(), projectA1, Permission.of("task.read")));
+
+        assertThat(decision.allowed()).isFalse();
+        assertThat(decision.getDenialReason()).contains(DenialReason.MEMBERSHIP_INACTIVE);
+    }
+
+    @Test
+    @DisplayName("Security 5: User with organization membership but insufficient project permissions is denied")
+    void shouldDenyAccessWhenUserHasInsufficientProjectPermissions() {
+        roleAssignmentService.assignProjectRole(
+                orgA.getId(), projectA1, devUser.getId(), Role.PROJECT_VIEWER, adminUser.getId(), null);
+
+        AuthorizationEvaluator evaluator = buildDatabaseWiredEvaluator();
+        AuthorizationDecision decision = evaluator.authorize(
+                AuthorizationRequest.project(devUser.getId(), orgA.getId(), projectA1, Permission.of("cycle", "manage")));
+
+        assertThat(decision.allowed()).isFalse();
+        assertThat(decision.getDenialReason()).contains(DenialReason.INSUFFICIENT_PERMISSIONS);
+    }
+
+    @Test
+    @DisplayName("Security 6: Revoked and expired project assignments are rejected (fail closed)")
+    void shouldDenyAccessWhenProjectAssignmentIsRevokedOrExpired() {
+        Instant past = Instant.now().minus(1, ChronoUnit.HOURS);
+        roleAssignmentService.assignProjectRole(
+                orgA.getId(), projectA1, devUser.getId(), Role.PROJECT_MEMBER, adminUser.getId(), past);
+
+        AuthorizationEvaluator evaluator = buildDatabaseWiredEvaluator();
+
+        // Expired assignment fails project assignment validator and evaluator
+        assertThat(databaseProjectAssignmentValidator.isAssignedToProject(devUser.getId(), orgA.getId(), projectA1)).isFalse();
+        AuthorizationDecision expiredDecision = evaluator.authorize(
+                AuthorizationRequest.project(devUser.getId(), orgA.getId(), projectA1, Permission.of("task.create")));
+        assertThat(expiredDecision.allowed()).isFalse();
+
+        // Reassign valid, then revoke
+        roleAssignmentService.assignProjectRole(
+                orgA.getId(), projectA1, devUser.getId(), Role.PROJECT_MEMBER, adminUser.getId(), null);
+        assertThat(databaseProjectAssignmentValidator.isAssignedToProject(devUser.getId(), orgA.getId(), projectA1)).isTrue();
+
+        roleAssignmentService.revokeProjectRole(
+                orgA.getId(), projectA1, devUser.getId(), Role.PROJECT_MEMBER, adminUser.getId(), "Security testing");
+
+        assertThat(databaseProjectAssignmentValidator.isAssignedToProject(devUser.getId(), orgA.getId(), projectA1)).isFalse();
+        AuthorizationDecision revokedDecision = evaluator.authorize(
+                AuthorizationRequest.project(devUser.getId(), orgA.getId(), projectA1, Permission.of("task.create")));
+        assertThat(revokedDecision.allowed()).isFalse();
+    }
+
+    @Test
+    @DisplayName("Security 7: Valid project lead and organization owner access is authorized")
+    void shouldAuthorizeValidProjectLeadAndOwnerAccess() {
+        roleAssignmentService.assignProjectRole(
+                orgA.getId(), projectA1, devUser.getId(), Role.PROJECT_LEAD, adminUser.getId(), null);
+
+        AuthorizationEvaluator evaluator = buildDatabaseWiredEvaluator();
+
+        // Project lead has task.assign in project
+        AuthorizationDecision leadDecision = evaluator.authorize(
+                AuthorizationRequest.project(devUser.getId(), orgA.getId(), projectA1, Permission.of("task.assign")));
+        assertThat(leadDecision.allowed()).isTrue();
+
+        // Organization owner inherits project read authority
+        AuthorizationDecision ownerDecision = evaluator.authorize(
+                AuthorizationRequest.project(owner.getId(), orgA.getId(), projectA1, Permission.of("project.read")));
+        assertThat(ownerDecision.allowed()).isTrue();
+    }
+
+    @Test
+    @DisplayName("Security 8: Cross-organization project access and role assignment attempts are rejected")
+    void shouldRejectCrossOrganizationProjectAccessAttempts() {
+        roleAssignmentService.assignProjectRole(
+                orgA.getId(), projectA1, devUser.getId(), Role.PROJECT_MEMBER, adminUser.getId(), null);
+
+        // Project belongs to Org A, not Org B
+        assertThat(databaseTenantBoundaryValidator.isProjectInOrganization(orgB.getId(), projectA1)).isFalse();
+
+        AuthorizationEvaluator evaluator = buildDatabaseWiredEvaluator();
+        AuthorizationDecision crossOrgDecision = evaluator.authorize(
+                AuthorizationRequest.project(outsiderUser.getId(), orgB.getId(), projectA1, Permission.of("task.read")));
+
+        assertThat(crossOrgDecision.allowed()).isFalse();
+        assertThat(crossOrgDecision.getDenialReason()).contains(DenialReason.TENANT_MISMATCH);
+
+        // Cannot assign roles across tenant boundary
+        assertThatThrownBy(() -> roleAssignmentService.assignProjectRole(
+                orgB.getId(), projectA1, outsiderUser.getId(), Role.PROJECT_MEMBER, outsiderUser.getId(), null))
+                .isInstanceOf(InvalidRoleAssignmentException.class)
+                .hasMessageContaining("Tenant boundary violation");
+    }
+
+    @Test
+    @DisplayName("Security 9: Legacy role fallback strictly respects tenant boundaries")
+    void shouldEnforceTenantIsolationUnderLegacyRoleFallback() {
+        roleAssignmentService.assignProjectRole(
+                orgA.getId(), projectA1, devUser.getId(), Role.PROJECT_MEMBER, adminUser.getId(), null);
+
+        AuthorizationEvaluator evaluator = buildDatabaseWiredEvaluator();
+
+        // devUser has legacy DEVELOPER role in Org A -> allows organization-scoped repo.read
+        AuthorizationDecision orgDecision = evaluator.authorize(
+                AuthorizationRequest.organization(devUser.getId(), orgA.getId(), Permission.of("repo", "read")));
+        assertThat(orgDecision.allowed()).isTrue();
+
+        // Legacy role in Org A provides zero access in Org B
+        AuthorizationDecision crossOrgDecision = evaluator.authorize(
+                AuthorizationRequest.organization(devUser.getId(), orgB.getId(), Permission.of("repo", "read")));
+        assertThat(crossOrgDecision.allowed()).isFalse();
+        assertThat(crossOrgDecision.getDenialReason()).contains(DenialReason.MEMBERSHIP_INACTIVE);
+
+        // Unassigned project fails closed even for members with legacy roles
+        UUID unassignedProject = UUID.randomUUID();
+        AuthorizationDecision unassignedDecision = evaluator.authorize(
+                AuthorizationRequest.project(devUser.getId(), orgA.getId(), unassignedProject, Permission.of("task.read")));
+        assertThat(unassignedDecision.allowed()).isFalse();
+        assertThat(unassignedDecision.getDenialReason()).contains(DenialReason.TENANT_MISMATCH);
+    }
+
+    @Test
+    @DisplayName("Security 10: Incomplete, null, or unknown authorization requests default-deny")
+    void shouldDefaultDenyForIncompleteOrUnknownAuthorizationData() {
+        AuthorizationEvaluator evaluator = buildDatabaseWiredEvaluator();
+
+        assertThat(evaluator.authorize((AuthorizationRequest) null).allowed()).isFalse();
+        assertThat(evaluator.authorize((AuthorizationRequest) null).getDenialReason()).contains(DenialReason.GENERAL_DENIED);
+
+        AuthorizationRequest unknownPermissionRequest = AuthorizationRequest.project(
+                owner.getId(), orgA.getId(), projectA1, Permission.of("custom.unknown_perm"));
+        AuthorizationDecision unknownDecision = evaluator.authorize(unknownPermissionRequest);
+        assertThat(unknownDecision.allowed()).isFalse();
+        assertThat(unknownDecision.getDenialReason()).contains(DenialReason.UNKNOWN_PERMISSION);
+
+        UUID unassignedProject = UUID.randomUUID();
+
+        // Revoking or listing unassigned project strictly fails closed
+        assertThatThrownBy(() -> roleAssignmentService.revokeProjectRole(
+                orgA.getId(), unassignedProject, devUser.getId(), Role.PROJECT_MEMBER, adminUser.getId(), "Reason"))
+                .isInstanceOf(InvalidRoleAssignmentException.class)
+                .hasMessageContaining("Tenant boundary violation");
+
+        assertThatThrownBy(() -> roleAssignmentService.listProjectRoleAssignments(
+                orgA.getId(), unassignedProject, adminUser.getId(), true))
+                .isInstanceOf(InvalidRoleAssignmentException.class)
+                .hasMessageContaining("Tenant boundary violation");
+    }
+
+    // ── Implementation 2.1 — Authoritative Project Binding Security Tests ─────
+
+    @Test
+    @DisplayName("Implementation 2.1 - Test 1: Arbitrary unregistered project UUID cannot be bound without authoritative ownership verification")
+    void shouldDenyBindingUnregisteredProjectWithoutAuthoritativeVerification() {
+        UUID unregisteredProjectId = UUID.randomUUID();
+
+        // Database tenant boundary validator fails closed for unregistered project with no assignments
+        assertThat(databaseTenantBoundaryValidator.isProjectInOrganization(orgA.getId(), unregisteredProjectId)).isFalse();
+
+        // Ordinary assignment attempt fails closed
+        assertThatThrownBy(() -> roleAssignmentService.assignProjectRole(
+                orgA.getId(), unregisteredProjectId, devUser.getId(), Role.PROJECT_MEMBER, adminUser.getId(), null))
+                .isInstanceOf(InvalidRoleAssignmentException.class)
+                .hasMessageContaining("Tenant boundary violation");
+
+        // Evaluator denies access with TENANT_MISMATCH
+        AuthorizationEvaluator evaluator = buildDatabaseWiredEvaluator();
+        AuthorizationDecision decision = evaluator.authorize(
+                AuthorizationRequest.project(devUser.getId(), orgA.getId(), unregisteredProjectId, Permission.of("task.read")));
+        assertThat(decision.allowed()).isFalse();
+        assertThat(decision.getDenialReason()).contains(DenialReason.TENANT_MISMATCH);
+    }
+
+    @Test
+    @DisplayName("Implementation 2.1 - Test 2: Valid registered project can be bound to its actual organization")
+    void shouldAllowBindingValidRegisteredProjectToActualOrganization() {
+        UUID validProjectId = UUID.randomUUID();
+
+        // Project is authoritatively registered in the project registry
+        projectRegistry.registerProject(orgA.getId(), validProjectId);
+        assertThat(databaseTenantBoundaryValidator.isProjectInOrganization(orgA.getId(), validProjectId)).isTrue();
+
+        // Initial binding succeeds via bindInitialProjectRole
+        ProjectRoleAssignment assignment = roleAssignmentService.bindInitialProjectRole(
+                orgA.getId(), validProjectId, devUser.getId(), Role.PROJECT_LEAD, adminUser.getId(), null);
+
+        assertThat(assignment).isNotNull();
+        assertThat(assignment.getRole().toDomainRole()).isEqualTo(Role.PROJECT_LEAD);
+        assertThat(assignment.getOrganization().getId()).isEqualTo(orgA.getId());
+
+        // Evaluator authorizes the assigned user on the bound project
+        AuthorizationEvaluator evaluator = buildDatabaseWiredEvaluator();
+        AuthorizationDecision decision = evaluator.authorize(
+                AuthorizationRequest.project(devUser.getId(), orgA.getId(), validProjectId, Permission.of("task.read")));
+        assertThat(decision.allowed()).isTrue();
+    }
+
+    @Test
+    @DisplayName("Implementation 2.1 - Test 3: Project cannot be registered or bound to two organizations (concurrent/conflict check)")
+    void shouldPreventConcurrentOrConflictingRegistrationOfSameProjectToMultipleOrganizations() {
+        UUID sharedProjectId = UUID.randomUUID();
+
+        // Register under Org A
+        projectRegistry.registerProject(orgA.getId(), sharedProjectId);
+
+        // Attempting to register under Org B throws InvalidProjectRegistrationException
+        assertThatThrownBy(() -> projectRegistry.registerProject(orgB.getId(), sharedProjectId))
+                .isInstanceOf(InvalidProjectRegistrationException.class)
+                .hasMessageContaining("already bound to organization");
+
+        // Concurrent registration simulation: exactly one thread succeeds when two orgs compete for the same UUID
+        TransactionTemplate txTemplate = new TransactionTemplate(transactionManager);
+        txTemplate.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
+
+        Organization raceOrgA = txTemplate.execute(status -> {
+            User ownerU = userRepository.save(User.builder()
+                    .email("raceOwnerA-" + UUID.randomUUID() + "@devflow.com")
+                    .username("raceA_" + UUID.randomUUID().toString().substring(0, 8))
+                    .passwordHash("hashed")
+                    .accountStatus(AccountStatus.ACTIVE)
+                    .emailVerified(true)
+                    .build());
+            return organizationRepository.save(Organization.builder()
+                    .name("Race Tenant Alpha")
+                    .slug("race-alpha-" + UUID.randomUUID().toString().substring(0, 8))
+                    .owner(ownerU)
+                    .build());
+        });
+
+        Organization raceOrgB = txTemplate.execute(status -> {
+            User ownerU = userRepository.save(User.builder()
+                    .email("raceOwnerB-" + UUID.randomUUID() + "@devflow.com")
+                    .username("raceB_" + UUID.randomUUID().toString().substring(0, 8))
+                    .passwordHash("hashed")
+                    .accountStatus(AccountStatus.ACTIVE)
+                    .emailVerified(true)
+                    .build());
+            return organizationRepository.save(Organization.builder()
+                    .name("Race Tenant Beta")
+                    .slug("race-beta-" + UUID.randomUUID().toString().substring(0, 8))
+                    .owner(ownerU)
+                    .build());
+        });
+
+        UUID raceProjectId = UUID.randomUUID();
+        AtomicInteger successCount = new AtomicInteger(0);
+        AtomicInteger conflictCount = new AtomicInteger(0);
+
+        CompletableFuture<Void> taskA = CompletableFuture.runAsync(() -> {
+            try {
+                projectRegistry.registerProject(raceOrgA.getId(), raceProjectId);
+                successCount.incrementAndGet();
+            } catch (InvalidProjectRegistrationException e) {
+                conflictCount.incrementAndGet();
+            }
+        });
+
+        CompletableFuture<Void> taskB = CompletableFuture.runAsync(() -> {
+            try {
+                projectRegistry.registerProject(raceOrgB.getId(), raceProjectId);
+                successCount.incrementAndGet();
+            } catch (InvalidProjectRegistrationException e) {
+                conflictCount.incrementAndGet();
+            }
+        });
+
+        CompletableFuture.allOf(taskA, taskB).join();
+
+        assertThat(successCount.get()).isEqualTo(1);
+        assertThat(conflictCount.get()).isEqualTo(1);
+        assertThat(projectRegistry.getProjectOrganizationId(raceProjectId)).isPresent();
+    }
+
+    @Test
+    @DisplayName("Implementation 2.1 - Test 4: Cross-organization initial binding is rejected")
+    void shouldRejectCrossOrganizationInitialBinding() {
+        UUID projectRegisteredInOrgA = UUID.randomUUID();
+        projectRegistry.registerProject(orgA.getId(), projectRegisteredInOrgA);
+
+        // Attempting initial binding under Org B is rejected
+        assertThatThrownBy(() -> roleAssignmentService.bindInitialProjectRole(
+                orgB.getId(), projectRegisteredInOrgA, outsiderUser.getId(), Role.PROJECT_LEAD, adminB.getId(), null))
+                .isInstanceOf(InvalidRoleAssignmentException.class);
+
+        // No role assignments were created for Org B
+        assertThat(projectAssignmentRepository.findByProjectId(projectRegisteredInOrgA)).isEmpty();
+    }
+
+    @Test
+    @DisplayName("Implementation 2.1 - Test 5: Existing project assignments cannot be moved across tenants")
+    void shouldPreventMovingExistingProjectAssignmentsAcrossTenants() {
+        // projectA1 is registered and bound to Org A
+        roleAssignmentService.assignProjectRole(
+                orgA.getId(), projectA1, devUser.getId(), Role.PROJECT_MEMBER, adminUser.getId(), null);
+
+        // Attempting to bind projectA1 into Org B fails
+        assertThatThrownBy(() -> roleAssignmentService.bindInitialProjectRole(
+                orgB.getId(), projectA1, outsiderUser.getId(), Role.PROJECT_MEMBER, adminB.getId(), null))
+                .isInstanceOf(InvalidRoleAssignmentException.class);
+
+        // Attempting to assign projectA1 in Org B fails closed
+        assertThatThrownBy(() -> roleAssignmentService.assignProjectRole(
+                orgB.getId(), projectA1, outsiderUser.getId(), Role.PROJECT_MEMBER, adminB.getId(), null))
+                .isInstanceOf(InvalidRoleAssignmentException.class)
+                .hasMessageContaining("Tenant boundary violation");
+
+        // Existing assignments in Org A remain completely unaffected
+        List<ProjectRoleAssignment> assignments = projectAssignmentRepository.findByProjectId(projectA1);
+        assertThat(assignments).hasSize(1);
+        assertThat(assignments.get(0).getOrganization().getId()).isEqualTo(orgA.getId());
+    }
+
+    @Test
+    @DisplayName("Implementation 2.1 - Test 6: Ordinary authorized project-role assignment works for correctly registered projects")
+    void shouldAllowOrdinaryAuthorizedProjectRoleAssignmentForCorrectlyRegisteredProject() {
+        UUID registeredProject = UUID.randomUUID();
+        projectRegistry.registerProject(orgA.getId(), registeredProject);
+
+        // Lead assignment via assignProjectRole works
+        ProjectRoleAssignment leadAssign = roleAssignmentService.assignProjectRole(
+                orgA.getId(), registeredProject, adminUser.getId(), Role.PROJECT_LEAD, adminUser.getId(), null);
+        assertThat(leadAssign).isNotNull();
+
+        // Subsequent member assignment by the project lead works
+        ProjectRoleAssignment memberAssign = roleAssignmentService.assignProjectRole(
+                orgA.getId(), registeredProject, devUser.getId(), Role.PROJECT_MEMBER, adminUser.getId(), null);
+        assertThat(memberAssign).isNotNull();
+        assertThat(memberAssign.getRole().toDomainRole()).isEqualTo(Role.PROJECT_MEMBER);
+
+        List<ProjectRoleAssignment> active = projectAssignmentRepository.findActiveByOrganizationIdAndProjectId(orgA.getId(), registeredProject, Instant.now());
+        assertThat(active).hasSize(2);
+    }
+
+    @Test
+    @DisplayName("Implementation 2.1 - Test 7: Unknown and incomplete project ownership data defaults to deny")
+    void shouldDefaultDenyWhenProjectOwnershipDataIsUnknownOrIncomplete() {
+        UUID unknownProjectId = UUID.randomUUID();
+
+        // Null checks
+        assertThat(databaseTenantBoundaryValidator.isProjectInOrganization(null, unknownProjectId)).isFalse();
+        assertThat(databaseTenantBoundaryValidator.isProjectInOrganization(orgA.getId(), null)).isFalse();
+        assertThat(databaseTenantBoundaryValidator.isProjectInOrganization(null, null)).isFalse();
+
+        // Non-existent organization
+        UUID nonExistentOrg = UUID.randomUUID();
+        assertThat(databaseTenantBoundaryValidator.isProjectInOrganization(nonExistentOrg, unknownProjectId)).isFalse();
+
+        // Unregistered project with no assignments
+        assertThat(databaseTenantBoundaryValidator.isProjectInOrganization(orgA.getId(), unknownProjectId)).isFalse();
+        assertThat(databaseTenantBoundaryValidator.getResourceOrganizationId("project", unknownProjectId.toString())).isEmpty();
+
+        // Evaluator denies unknown project access
+        AuthorizationEvaluator evaluator = buildDatabaseWiredEvaluator();
+        AuthorizationDecision decision = evaluator.authorize(
+                AuthorizationRequest.project(devUser.getId(), orgA.getId(), unknownProjectId, Permission.of("task.read")));
+        assertThat(decision.allowed()).isFalse();
+        assertThat(decision.getDenialReason()).contains(DenialReason.TENANT_MISMATCH);
     }
 }
