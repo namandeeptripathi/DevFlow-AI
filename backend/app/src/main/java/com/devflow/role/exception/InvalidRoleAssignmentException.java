@@ -10,4 +10,8 @@ public class InvalidRoleAssignmentException extends RoleAssignmentException {
     public InvalidRoleAssignmentException(String message) {
         super(message);
     }
+
+    public InvalidRoleAssignmentException(String message, Throwable cause) {
+        super(message, cause);
+    }
 }

@@ -6,6 +6,7 @@ import com.devflow.modules.auth.evaluator.TenantBoundaryValidator;
 import com.devflow.organization.domain.Organization;
 import com.devflow.organization.domain.OrganizationMember;
 import com.devflow.organization.domain.OrganizationMembershipStatus;
+import com.devflow.organization.domain.OrganizationRole;
 import com.devflow.organization.exception.OrganizationNotFoundException;
 import com.devflow.organization.repository.OrganizationMemberRepository;
 import com.devflow.organization.repository.OrganizationRepository;
@@ -19,6 +20,7 @@ import com.devflow.role.exception.InvalidRoleAssignmentException;
 import com.devflow.role.exception.RoleAssignmentAccessDeniedException;
 import com.devflow.role.exception.RoleAssignmentAlreadyExistsException;
 import com.devflow.role.exception.RoleAssignmentNotFoundException;
+import com.devflow.role.registry.ProjectRegistry;
 import com.devflow.role.repository.CustomRoleAssignmentRepository;
 import com.devflow.role.repository.CustomRoleRepository;
 import com.devflow.role.repository.OrganizationRoleAssignmentRepository;
@@ -84,8 +86,15 @@ public class RoleAssignmentService {
     @Autowired(required = false)
     private com.devflow.modules.auth.audit.AuthorizationAuditRecorder auditRecorder;
 
+    @Autowired(required = false)
+    private ProjectRegistry projectRegistry;
+
     public void setAuditRecorder(com.devflow.modules.auth.audit.AuthorizationAuditRecorder auditRecorder) {
         this.auditRecorder = auditRecorder;
+    }
+
+    public void setProjectRegistry(ProjectRegistry projectRegistry) {
+        this.projectRegistry = projectRegistry;
     }
 
     @Autowired
@@ -279,6 +288,16 @@ public class RoleAssignmentService {
                 .build();
 
         OrganizationRoleAssignment saved = orgAssignmentRepository.save(assignment);
+
+        // Synchronize OrganizationMember.role if granting OWNER or ADMIN
+        if (role == Role.ORGANIZATION_OWNER) {
+            member.setRole(OrganizationRole.OWNER);
+            organizationMemberRepository.save(member);
+        } else if (role == Role.ORGANIZATION_ADMIN && member.getRole() != OrganizationRole.OWNER) {
+            member.setRole(OrganizationRole.ADMIN);
+            organizationMemberRepository.save(member);
+        }
+
         if (cacheService != null) {
             cacheService.evictUser(organizationId, targetUserId);
         }
@@ -349,7 +368,7 @@ public class RoleAssignmentService {
                         "Only ORGANIZATION_OWNER can revoke ORGANIZATION_OWNER role. User [" + revokedByUserId + "] is not an owner.");
             }
             Instant now = Instant.now();
-            long activeOwners = orgAssignmentRepository.countActiveOwners(organizationId, now);
+            long activeOwners = countActiveOwners(organizationId, now);
             if (activeOwners <= 1) {
                 throw new RoleAssignmentAccessDeniedException(
                         "Cannot revoke sole active ORGANIZATION_OWNER from organization [" + organizationId + "]");
@@ -367,6 +386,32 @@ public class RoleAssignmentService {
 
         assignment.revoke(revokedByUser, reason, now);
         OrganizationRoleAssignment updated = orgAssignmentRepository.save(assignment);
+
+        // Synchronize OrganizationMember.role if OWNER or ADMIN was revoked
+        if (role == Role.ORGANIZATION_OWNER) {
+            organizationMemberRepository.findByOrganizationIdAndUserId(organizationId, targetUserId)
+                    .ifPresent(m -> {
+                        boolean hasAdmin = orgAssignmentRepository.findActiveByOrganizationIdAndUserId(organizationId, targetUserId, now)
+                                .stream()
+                                .anyMatch(a -> !a.getId().equals(assignment.getId()) && a.getRole().getName().equals("ORGANIZATION_ADMIN"));
+                        m.setRole(hasAdmin ? OrganizationRole.ADMIN : OrganizationRole.DEVELOPER);
+                        organizationMemberRepository.save(m);
+                    });
+        } else if (role == Role.ORGANIZATION_ADMIN) {
+            organizationMemberRepository.findByOrganizationIdAndUserId(organizationId, targetUserId)
+                    .ifPresent(m -> {
+                        if (m.getRole() == OrganizationRole.ADMIN) {
+                            boolean hasOwner = orgAssignmentRepository.findActiveByOrganizationIdAndUserId(organizationId, targetUserId, now)
+                                    .stream()
+                                    .anyMatch(a -> !a.getId().equals(assignment.getId()) && a.getRole().getName().equals("ORGANIZATION_OWNER"));
+                            if (!hasOwner) {
+                                m.setRole(OrganizationRole.DEVELOPER);
+                                organizationMemberRepository.save(m);
+                            }
+                        }
+                    });
+        }
+
         if (cacheService != null) {
             cacheService.evictUser(organizationId, targetUserId);
         }
@@ -385,6 +430,27 @@ public class RoleAssignmentService {
         }
         log.info("Revoked role [{}] from user [{}] in organization [{}] by [{}] (reason: {})", role.name(), targetUserId, organizationId, revokedByUserId, reason);
         return updated;
+    }
+
+    /**
+     * Counts distinct active owners of the organization, incorporating active unrevoked, unexpired
+     * {@link Role#ORGANIZATION_OWNER} role assignments and any legacy active owners who have
+     * not yet transitioned to the persistent role assignment table.
+     *
+     * @param organizationId tenant organization UUID
+     * @param now reference instant
+     * @return count of active owners
+     */
+    @Transactional(readOnly = true)
+    public long countActiveOwners(UUID organizationId, Instant now) {
+        long activeAssignments = orgAssignmentRepository.countActiveOwners(organizationId, now);
+        List<OrganizationMember> members = organizationMemberRepository
+                .findByOrganizationIdAndStatus(organizationId, OrganizationMembershipStatus.ACTIVE);
+        long unmigratedOwners = members.stream()
+                .filter(m -> m.getRole() == OrganizationRole.OWNER)
+                .filter(m -> !orgAssignmentRepository.hasAnyAssignments(organizationId, m.getUser().getId()))
+                .count();
+        return activeAssignments + unmigratedOwners;
     }
 
     /**
@@ -735,6 +801,76 @@ public class RoleAssignmentService {
     // ── Project Role Assignments ──────────────────────────────────────────────
 
     /**
+     * Authoritatively binds an initial project to an organization and assigns the initial project role.
+     *
+     * <p>Enforces:
+     * <ul>
+     *   <li>Caller authorization: Requires ORGANIZATION_OWNER or ORGANIZATION_ADMIN.</li>
+     *   <li>Organization context & existence.</li>
+     *   <li>Authoritative project registration in {@link ProjectRegistry}: prevents concurrent or cross-tenant binding.</li>
+     *   <li>Target user active organization membership.</li>
+     * </ul>
+     *
+     * @param organizationId tenant organization UUID
+     * @param projectId project UUID to bind
+     * @param targetUserId user receiving the initial project role
+     * @param role canonical project role (typically PROJECT_OWNER or PROJECT_LEAD)
+     * @param assignedByUserId user performing the initial binding
+     * @param expiresAt optional expiration timestamp
+     * @return the persisted {@link ProjectRoleAssignment}
+     */
+    @Transactional
+    public ProjectRoleAssignment bindInitialProjectRole(
+            UUID organizationId,
+            UUID projectId,
+            UUID targetUserId,
+            Role role,
+            UUID assignedByUserId,
+            Instant expiresAt
+    ) {
+        Objects.requireNonNull(organizationId, "organizationId must not be null");
+        Objects.requireNonNull(projectId, "projectId must not be null");
+        Objects.requireNonNull(targetUserId, "targetUserId must not be null");
+        Objects.requireNonNull(role, "role must not be null");
+        Objects.requireNonNull(assignedByUserId, "assignedByUserId must not be null");
+
+        if (!role.isProjectRole()) {
+            throw new InvalidRoleAssignmentException("Cannot assign non-project role to project: " + role);
+        }
+
+        Organization org = organizationRepository.findById(organizationId)
+                .orElseThrow(() -> new OrganizationNotFoundException("Organization not found: " + organizationId));
+        organizationRepository.findByIdForUpdate(organizationId);
+
+        // Caller authorization: only organization owner or admin can bind initial project
+        Set<Role> callerRoles = getActiveOrganizationRoles(organizationId, assignedByUserId);
+        boolean isCallerOwner = callerRoles.contains(Role.ORGANIZATION_OWNER);
+        boolean isCallerAdmin = callerRoles.contains(Role.ORGANIZATION_ADMIN);
+        if (!isCallerOwner && !isCallerAdmin) {
+            throw new RoleAssignmentAccessDeniedException(
+                    "User [" + assignedByUserId + "] is not authorized to bind projects in organization [" + organizationId + "]. Requires ORGANIZATION_OWNER or ORGANIZATION_ADMIN.");
+        }
+
+        // Verify existing database assignments don't belong to another organization
+        List<ProjectRoleAssignment> existingAssignments = projectAssignmentRepository.findByProjectId(projectId);
+        if (!existingAssignments.isEmpty()) {
+            boolean belongsToOrg = existingAssignments.stream()
+                    .allMatch(a -> a.getOrganization() != null && organizationId.equals(a.getOrganization().getId()));
+            if (!belongsToOrg) {
+                throw new InvalidRoleAssignmentException(
+                        "Tenant boundary violation: Project [" + projectId + "] already has assignments in another organization");
+            }
+        }
+
+        // Authoritatively register the project in ProjectRegistry to anchor the tenant boundary
+        if (projectRegistry != null) {
+            projectRegistry.registerProject(organizationId, projectId, assignedByUserId);
+        }
+
+        return assignProjectRole(organizationId, projectId, targetUserId, role, assignedByUserId, expiresAt);
+    }
+
+    /**
      * Assigns a project-scoped canonical role to a user.
      *
      * @param organizationId tenant organization UUID
@@ -764,10 +900,23 @@ public class RoleAssignmentService {
             throw new InvalidRoleAssignmentException("Cannot assign non-project role to project: " + role);
         }
 
-        // Tenant boundary check: Project must belong to the organization (if validator present)
-        if (tenantBoundaryValidator != null && !tenantBoundaryValidator.isProjectInOrganization(organizationId, projectId)) {
-            throw new InvalidRoleAssignmentException(
-                    "Tenant boundary violation: Project [" + projectId + "] does not belong to organization [" + organizationId + "]");
+        // Tenant boundary check: Project must belong to the organization (fail-closed)
+        if (tenantBoundaryValidator != null) {
+            if (!tenantBoundaryValidator.isProjectInOrganization(organizationId, projectId)) {
+                throw new InvalidRoleAssignmentException(
+                        "Tenant boundary violation: Project [" + projectId + "] does not belong to organization [" + organizationId + "]");
+            }
+        } else if (projectRegistry != null) {
+            if (!projectRegistry.isProjectRegistered(organizationId, projectId)) {
+                throw new InvalidRoleAssignmentException(
+                        "Tenant boundary violation: Project [" + projectId + "] does not belong to organization [" + organizationId + "]");
+            }
+        } else {
+            List<ProjectRoleAssignment> existingAssignments = projectAssignmentRepository.findByProjectId(projectId);
+            if (existingAssignments.isEmpty() || existingAssignments.stream().anyMatch(a -> a.getOrganization() == null || !organizationId.equals(a.getOrganization().getId()))) {
+                throw new InvalidRoleAssignmentException(
+                        "Tenant boundary violation: Project [" + projectId + "] does not belong to organization [" + organizationId + "]");
+            }
         }
 
         Organization org = organizationRepository.findById(organizationId)
@@ -815,6 +964,9 @@ public class RoleAssignmentService {
         for (ProjectRoleAssignment expired : expiredAssignments) {
             expired.revoke(assignedByUser, "EXPIRED_SUPERSEDED", now);
             projectAssignmentRepository.save(expired);
+        }
+        if (!expiredAssignments.isEmpty()) {
+            projectAssignmentRepository.flush();
         }
 
         ProjectRoleAssignment assignment = ProjectRoleAssignment.builder()
@@ -876,10 +1028,18 @@ public class RoleAssignmentService {
         Objects.requireNonNull(role, "role must not be null");
         Objects.requireNonNull(revokedByUserId, "revokedByUserId must not be null");
 
-        // Tenant boundary check: Project must belong to the organization (if validator present)
-        if (tenantBoundaryValidator != null && !tenantBoundaryValidator.isProjectInOrganization(organizationId, projectId)) {
-            throw new InvalidRoleAssignmentException(
-                    "Tenant boundary violation: Project [" + projectId + "] does not belong to organization [" + organizationId + "]");
+        // Tenant boundary check: Project must belong to the organization
+        if (tenantBoundaryValidator != null) {
+            if (!tenantBoundaryValidator.isProjectInOrganization(organizationId, projectId)) {
+                throw new InvalidRoleAssignmentException(
+                        "Tenant boundary violation: Project [" + projectId + "] does not belong to organization [" + organizationId + "]");
+            }
+        } else {
+            List<ProjectRoleAssignment> existingAssignments = projectAssignmentRepository.findByProjectId(projectId);
+            if (existingAssignments.isEmpty() || existingAssignments.stream().anyMatch(a -> a.getOrganization() == null || !organizationId.equals(a.getOrganization().getId()))) {
+                throw new InvalidRoleAssignmentException(
+                        "Tenant boundary violation: Project [" + projectId + "] does not belong to organization [" + organizationId + "]");
+            }
         }
 
         User revokedByUser = userRepository.findById(revokedByUserId)
@@ -948,10 +1108,18 @@ public class RoleAssignmentService {
         Objects.requireNonNull(projectId, "projectId must not be null");
         Objects.requireNonNull(callerUserId, "callerUserId must not be null");
 
-        // Tenant boundary check if validator present
-        if (tenantBoundaryValidator != null && !tenantBoundaryValidator.isProjectInOrganization(organizationId, projectId)) {
-            throw new InvalidRoleAssignmentException(
-                    "Tenant boundary violation: Project [" + projectId + "] does not belong to organization [" + organizationId + "]");
+        // Tenant boundary check: Project must belong to the organization
+        if (tenantBoundaryValidator != null) {
+            if (!tenantBoundaryValidator.isProjectInOrganization(organizationId, projectId)) {
+                throw new InvalidRoleAssignmentException(
+                        "Tenant boundary violation: Project [" + projectId + "] does not belong to organization [" + organizationId + "]");
+            }
+        } else {
+            List<ProjectRoleAssignment> existingAssignments = projectAssignmentRepository.findByProjectId(projectId);
+            if (existingAssignments.isEmpty() || existingAssignments.stream().anyMatch(a -> a.getOrganization() == null || !organizationId.equals(a.getOrganization().getId()))) {
+                throw new InvalidRoleAssignmentException(
+                        "Tenant boundary violation: Project [" + projectId + "] does not belong to organization [" + organizationId + "]");
+            }
         }
 
         // Verify caller authorization: org OWNER/ADMIN or project LEAD or active project member
@@ -993,6 +1161,20 @@ public class RoleAssignmentService {
         Objects.requireNonNull(projectId, "projectId must not be null");
         Objects.requireNonNull(assignmentId, "assignmentId must not be null");
         Objects.requireNonNull(revokedByUserId, "revokedByUserId must not be null");
+
+        // Tenant boundary check: Project must belong to the organization
+        if (tenantBoundaryValidator != null) {
+            if (!tenantBoundaryValidator.isProjectInOrganization(organizationId, projectId)) {
+                throw new InvalidRoleAssignmentException(
+                        "Tenant boundary violation: Project [" + projectId + "] does not belong to organization [" + organizationId + "]");
+            }
+        } else {
+            List<ProjectRoleAssignment> existingAssignments = projectAssignmentRepository.findByProjectId(projectId);
+            if (existingAssignments.isEmpty() || existingAssignments.stream().anyMatch(a -> a.getOrganization() == null || !organizationId.equals(a.getOrganization().getId()))) {
+                throw new InvalidRoleAssignmentException(
+                        "Tenant boundary violation: Project [" + projectId + "] does not belong to organization [" + organizationId + "]");
+            }
+        }
 
         ProjectRoleAssignment assignment = projectAssignmentRepository.findById(assignmentId)
                 .orElseThrow(() -> new RoleAssignmentNotFoundException(
