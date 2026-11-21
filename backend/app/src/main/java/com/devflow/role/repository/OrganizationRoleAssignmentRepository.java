@@ -2,6 +2,7 @@ package com.devflow.role.repository;
 
 import com.devflow.role.domain.OrganizationRoleAssignment;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
@@ -199,4 +200,19 @@ public interface OrganizationRoleAssignmentRepository extends JpaRepository<Orga
         @Param("organizationId") UUID organizationId,
         @Param("now") Instant now
     );
+
+    /**
+     * Deletes all role assignments belonging to a specific organization.
+     *
+     * @param organizationId tenant organization UUID
+     */
+    void deleteByOrganizationId(UUID organizationId);
+
+    /**
+     * Deletes all role assignments for a specific user within an organization.
+     *
+     * @param organizationId tenant organization UUID
+     * @param userId user UUID
+     */
+    void deleteByOrganizationIdAndUserId(UUID organizationId, UUID userId);
 }

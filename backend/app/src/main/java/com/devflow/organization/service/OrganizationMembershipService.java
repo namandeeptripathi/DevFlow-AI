@@ -1,5 +1,7 @@
 package com.devflow.organization.service;
 
+import com.devflow.modules.auth.domain.Role;
+import com.devflow.modules.auth.domain.RoleScope;
 import com.devflow.organization.domain.Organization;
 import com.devflow.organization.domain.OrganizationMember;
 import com.devflow.organization.domain.OrganizationMembershipStatus;
@@ -10,6 +12,11 @@ import com.devflow.organization.exception.OrganizationMemberNotFoundException;
 import com.devflow.organization.exception.OrganizationNotFoundException;
 import com.devflow.organization.repository.OrganizationMemberRepository;
 import com.devflow.organization.repository.OrganizationRepository;
+import com.devflow.role.adapter.DatabaseRoleResolver;
+import com.devflow.role.domain.OrganizationRoleAssignment;
+import com.devflow.role.domain.RoleEntity;
+import com.devflow.role.repository.OrganizationRoleAssignmentRepository;
+import com.devflow.role.repository.RoleRepository;
 import com.devflow.security.authorization.cache.AuthorizationCacheService;
 import com.devflow.team.domain.TeamRole;
 import com.devflow.team.domain.TeamStatus;
@@ -63,6 +70,8 @@ public class OrganizationMembershipService {
     private final UserRepository userRepository;
     private final OrganizationAuthorizationService authorizationService;
     private final TeamMemberRepository teamMemberRepository;
+    private final OrganizationRoleAssignmentRepository orgAssignmentRepository;
+    private final RoleRepository roleRepository;
     private AuthorizationCacheService cacheService;
 
     @Autowired(required = false)
@@ -79,7 +88,9 @@ public class OrganizationMembershipService {
             UserRepository userRepository,
             OrganizationAuthorizationService authorizationService,
             TeamMemberRepository teamMemberRepository,
-            @Autowired(required = false) AuthorizationCacheService cacheService
+            @Autowired(required = false) AuthorizationCacheService cacheService,
+            @Autowired(required = false) OrganizationRoleAssignmentRepository orgAssignmentRepository,
+            @Autowired(required = false) RoleRepository roleRepository
     ) {
         this.organizationMemberRepository = Objects.requireNonNull(
                 organizationMemberRepository, "organizationMemberRepository must not be null");
@@ -92,6 +103,20 @@ public class OrganizationMembershipService {
         this.teamMemberRepository = Objects.requireNonNull(
                 teamMemberRepository, "teamMemberRepository must not be null");
         this.cacheService = cacheService;
+        this.orgAssignmentRepository = orgAssignmentRepository;
+        this.roleRepository = roleRepository;
+    }
+
+    public OrganizationMembershipService(
+            OrganizationMemberRepository organizationMemberRepository,
+            OrganizationRepository organizationRepository,
+            UserRepository userRepository,
+            OrganizationAuthorizationService authorizationService,
+            TeamMemberRepository teamMemberRepository,
+            AuthorizationCacheService cacheService
+    ) {
+        this(organizationMemberRepository, organizationRepository, userRepository,
+                authorizationService, teamMemberRepository, cacheService, null, null);
     }
 
     public OrganizationMembershipService(
@@ -102,11 +127,64 @@ public class OrganizationMembershipService {
             TeamMemberRepository teamMemberRepository
     ) {
         this(organizationMemberRepository, organizationRepository, userRepository,
-                authorizationService, teamMemberRepository, null);
+                authorizationService, teamMemberRepository, null, null, null);
     }
 
     public void setCacheService(AuthorizationCacheService cacheService) {
         this.cacheService = cacheService;
+    }
+
+    /**
+     * Counts distinct active owners of the organization, incorporating active unrevoked, unexpired
+     * {@link Role#ORGANIZATION_OWNER} role assignments and any legacy active owners who have
+     * not yet transitioned to the persistent role assignment table.
+     *
+     * @param organizationId the UUID of the organization
+     * @return the total number of active owners
+     */
+    public long countActiveOwners(UUID organizationId) {
+        Instant now = Instant.now();
+        if (orgAssignmentRepository != null) {
+            long activeRoleOwners = orgAssignmentRepository.countActiveOwners(organizationId, now);
+            List<OrganizationMember> members = organizationMemberRepository
+                    .findByOrganizationIdAndStatus(organizationId, OrganizationMembershipStatus.ACTIVE);
+            long unmigratedOwners = members.stream()
+                    .filter(m -> m.getRole() == OrganizationRole.OWNER)
+                    .filter(m -> !orgAssignmentRepository.hasAnyAssignments(organizationId, m.getUser().getId()))
+                    .count();
+            return activeRoleOwners + unmigratedOwners;
+        }
+        return organizationMemberRepository.countByOrganizationIdAndRoleAndStatus(
+                organizationId, OrganizationRole.OWNER, OrganizationMembershipStatus.ACTIVE);
+    }
+
+    /**
+     * Evaluates whether a target member is currently recognized as an active owner.
+     * Expired or revoked role assignments do not grant active owner status.
+     *
+     * @param organizationId tenant UUID
+     * @param targetUserId user UUID
+     * @param member current membership record
+     * @return {@code true} if currently an active owner
+     */
+    private boolean isTargetActiveOwner(UUID organizationId, UUID targetUserId, OrganizationMember member) {
+        if (member.getStatus() != OrganizationMembershipStatus.ACTIVE) {
+            return false;
+        }
+        Instant now = Instant.now();
+        if (orgAssignmentRepository != null) {
+            List<OrganizationRoleAssignment> active = orgAssignmentRepository
+                    .findActiveByOrganizationIdAndUserId(organizationId, targetUserId, now);
+            for (OrganizationRoleAssignment a : active) {
+                if ("ORGANIZATION_OWNER".equals(a.getRole().getName())) {
+                    return true;
+                }
+            }
+            if (orgAssignmentRepository.hasAnyAssignments(organizationId, targetUserId)) {
+                return false;
+            }
+        }
+        return member.getRole() == OrganizationRole.OWNER;
     }
 
     // ── Commands ──────────────────────────────────────────────────────────────
@@ -161,6 +239,36 @@ public class OrganizationMembershipService {
                 .build();
 
         OrganizationMember saved = organizationMemberRepository.save(member);
+
+        // Synchronize canonical role assignment (Permissions Implementation 1)
+        if (orgAssignmentRepository != null && roleRepository != null) {
+            Role canonicalRole = DatabaseRoleResolver.mapLegacyOrganizationRole(role);
+            roleRepository.findByName(canonicalRole.name()).ifPresent(roleEntity -> {
+                Instant now = Instant.now();
+                if (!orgAssignmentRepository.hasActiveAssignment(organizationId, targetUserId, roleEntity.getId(), now)) {
+                    User callerUser = userRepository.findById(callerUserId).orElse(user);
+                    List<OrganizationRoleAssignment> expired = orgAssignmentRepository.findExpiredUnrevoked(
+                            organizationId, targetUserId, roleEntity.getId(), now);
+                    for (OrganizationRoleAssignment exp : expired) {
+                        exp.revoke(callerUser, "EXPIRED_SUPERSEDED", now);
+                        orgAssignmentRepository.save(exp);
+                    }
+
+                    OrganizationRoleAssignment assignment = OrganizationRoleAssignment.builder()
+                            .organization(organization)
+                            .user(user)
+                            .role(roleEntity)
+                            .roleScope(RoleScope.ORGANIZATION)
+                            .assignedBy(callerUser)
+                            .assignedAt(now)
+                            .build();
+                    orgAssignmentRepository.save(assignment);
+                    log.info("Synchronized role assignment [{}] for added member [{}] in organization [{}]",
+                            canonicalRole.name(), targetUserId, organizationId);
+                }
+            });
+        }
+
         if (cacheService != null) {
             cacheService.evictUser(organizationId, targetUserId);
         }
@@ -199,9 +307,8 @@ public class OrganizationMembershipService {
                             "Member not found for user [" + targetUserId + "] in organization [" + organizationId + "]");
                 });
 
-        if (member.getRole() == OrganizationRole.OWNER && member.getStatus() == OrganizationMembershipStatus.ACTIVE) {
-            long activeOwnerCount = organizationMemberRepository.countByOrganizationIdAndRoleAndStatus(
-                    organizationId, OrganizationRole.OWNER, OrganizationMembershipStatus.ACTIVE);
+        if (isTargetActiveOwner(organizationId, targetUserId, member)) {
+            long activeOwnerCount = countActiveOwners(organizationId);
             if (activeOwnerCount <= 1) {
                 log.warn("Remove member rejected: attempt to remove last active OWNER [{}] from organization [{}]",
                         targetUserId, organizationId);
@@ -222,6 +329,11 @@ public class OrganizationMembershipService {
 
         // Clean up any team memberships held by the user in this organization
         teamMemberRepository.deleteByUserIdAndOrganizationId(targetUserId, organizationId);
+
+        // Clean up role assignments for the removed member
+        if (orgAssignmentRepository != null) {
+            orgAssignmentRepository.deleteByOrganizationIdAndUserId(organizationId, targetUserId);
+        }
 
         organizationMemberRepository.delete(member);
         if (cacheService != null) {
@@ -277,10 +389,9 @@ public class OrganizationMembershipService {
                             "Member not found for user [" + targetUserId + "] in organization [" + organizationId + "]");
                 });
 
-        if (member.getRole() == OrganizationRole.OWNER && newRole != OrganizationRole.OWNER
-                && member.getStatus() == OrganizationMembershipStatus.ACTIVE) {
-            long activeOwnerCount = organizationMemberRepository.countByOrganizationIdAndRoleAndStatus(
-                    organizationId, OrganizationRole.OWNER, OrganizationMembershipStatus.ACTIVE);
+        OrganizationRole oldRole = member.getRole();
+        if (isTargetActiveOwner(organizationId, targetUserId, member) && newRole != OrganizationRole.OWNER) {
+            long activeOwnerCount = countActiveOwners(organizationId);
             if (activeOwnerCount <= 1) {
                 log.warn("Role change rejected: attempt to demote last active OWNER [{}] in organization [{}]",
                         targetUserId, organizationId);
@@ -289,9 +400,51 @@ public class OrganizationMembershipService {
             }
         }
 
-        OrganizationRole oldRole = member.getRole();
         member.setRole(newRole);
         OrganizationMember updated = organizationMemberRepository.save(member);
+
+        // Synchronize canonical role assignment (Permissions Implementation 1)
+        if (orgAssignmentRepository != null && roleRepository != null) {
+            Instant now = Instant.now();
+            User callerUser = userRepository.findById(callerUserId).orElse(member.getUser());
+            Role canonicalNewRole = DatabaseRoleResolver.mapLegacyOrganizationRole(newRole);
+            Role canonicalOldRole = (oldRole != null) ? DatabaseRoleResolver.mapLegacyOrganizationRole(oldRole) : null;
+
+            // Revoke active assignment for previous canonical role if different
+            if (canonicalOldRole != null && canonicalOldRole != canonicalNewRole) {
+                roleRepository.findByName(canonicalOldRole.name()).ifPresent(oldRoleEntity -> {
+                    orgAssignmentRepository.findActiveByOrganizationIdAndUserIdAndRoleId(
+                            organizationId, targetUserId, oldRoleEntity.getId(), now)
+                            .ifPresent(assignment -> {
+                                assignment.revoke(callerUser, "ROLE_CHANGED", now);
+                                orgAssignmentRepository.save(assignment);
+                            });
+                });
+            }
+
+            // Assign new canonical role if not already active
+            roleRepository.findByName(canonicalNewRole.name()).ifPresent(newRoleEntity -> {
+                if (!orgAssignmentRepository.hasActiveAssignment(organizationId, targetUserId, newRoleEntity.getId(), now)) {
+                    List<OrganizationRoleAssignment> expired = orgAssignmentRepository.findExpiredUnrevoked(
+                            organizationId, targetUserId, newRoleEntity.getId(), now);
+                    for (OrganizationRoleAssignment exp : expired) {
+                        exp.revoke(callerUser, "EXPIRED_SUPERSEDED", now);
+                        orgAssignmentRepository.save(exp);
+                    }
+
+                    OrganizationRoleAssignment newAssignment = OrganizationRoleAssignment.builder()
+                            .organization(member.getOrganization())
+                            .user(member.getUser())
+                            .role(newRoleEntity)
+                            .roleScope(RoleScope.ORGANIZATION)
+                            .assignedBy(callerUser)
+                            .assignedAt(now)
+                            .build();
+                    orgAssignmentRepository.save(newAssignment);
+                }
+            });
+        }
+
         if (cacheService != null) {
             cacheService.evictUser(organizationId, targetUserId);
         }

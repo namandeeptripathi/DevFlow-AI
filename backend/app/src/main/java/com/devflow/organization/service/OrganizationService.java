@@ -9,10 +9,18 @@ import com.devflow.organization.exception.OrganizationNotFoundException;
 import com.devflow.organization.repository.OrganizationInvitationRepository;
 import com.devflow.organization.repository.OrganizationMemberRepository;
 import com.devflow.organization.repository.OrganizationRepository;
+import com.devflow.modules.auth.domain.Role;
+import com.devflow.modules.auth.domain.RoleScope;
+import com.devflow.role.domain.OrganizationRoleAssignment;
+import com.devflow.role.domain.RoleEntity;
+import com.devflow.role.repository.OrganizationRoleAssignmentRepository;
+import com.devflow.role.repository.RoleRepository;
+import com.devflow.security.authorization.cache.AuthorizationCacheService;
 import com.devflow.user.domain.User;
 import com.devflow.user.repository.UserRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -60,13 +68,20 @@ public class OrganizationService {
     private final OrganizationInvitationRepository organizationInvitationRepository;
     private final UserRepository userRepository;
     private final OrganizationAuthorizationService authorizationService;
+    private final OrganizationRoleAssignmentRepository orgAssignmentRepository;
+    private final RoleRepository roleRepository;
+    private final AuthorizationCacheService cacheService;
 
+    @Autowired
     public OrganizationService(
             OrganizationRepository organizationRepository,
             OrganizationMemberRepository organizationMemberRepository,
             OrganizationInvitationRepository organizationInvitationRepository,
             UserRepository userRepository,
-            OrganizationAuthorizationService authorizationService
+            OrganizationAuthorizationService authorizationService,
+            @Autowired(required = false) OrganizationRoleAssignmentRepository orgAssignmentRepository,
+            @Autowired(required = false) RoleRepository roleRepository,
+            @Autowired(required = false) AuthorizationCacheService cacheService
     ) {
         this.organizationRepository = Objects.requireNonNull(
                 organizationRepository, "organizationRepository must not be null");
@@ -78,6 +93,20 @@ public class OrganizationService {
                 userRepository, "userRepository must not be null");
         this.authorizationService = Objects.requireNonNull(
                 authorizationService, "authorizationService must not be null");
+        this.orgAssignmentRepository = orgAssignmentRepository;
+        this.roleRepository = roleRepository;
+        this.cacheService = cacheService;
+    }
+
+    public OrganizationService(
+            OrganizationRepository organizationRepository,
+            OrganizationMemberRepository organizationMemberRepository,
+            OrganizationInvitationRepository organizationInvitationRepository,
+            UserRepository userRepository,
+            OrganizationAuthorizationService authorizationService
+    ) {
+        this(organizationRepository, organizationMemberRepository, organizationInvitationRepository,
+                userRepository, authorizationService, null, null, null);
     }
 
     // ── Commands ──────────────────────────────────────────────────────────────
@@ -140,6 +169,32 @@ public class OrganizationService {
                 .build();
 
         organizationMemberRepository.save(ownerMember);
+
+        // Atomic founding owner role assignment synchronization (Permissions Implementation 1)
+        if (orgAssignmentRepository != null && roleRepository != null) {
+            RoleEntity ownerRoleEntity = roleRepository.findByName(Role.ORGANIZATION_OWNER.name())
+                    .orElseThrow(() -> new IllegalStateException(
+                            "Canonical role [" + Role.ORGANIZATION_OWNER.name() + "] not found in catalog"));
+
+            Instant now = Instant.now();
+            if (!orgAssignmentRepository.hasActiveAssignment(saved.getId(), callerUserId, ownerRoleEntity.getId(), now)) {
+                OrganizationRoleAssignment foundingOwnerAssignment = OrganizationRoleAssignment.builder()
+                        .organization(saved)
+                        .user(owner)
+                        .role(ownerRoleEntity)
+                        .roleScope(RoleScope.ORGANIZATION)
+                        .assignedBy(owner)
+                        .assignedAt(now)
+                        .build();
+
+                orgAssignmentRepository.save(foundingOwnerAssignment);
+                log.info("Synchronized founding owner [{}] role assignment [{}] for organization [{}]",
+                        callerUserId, Role.ORGANIZATION_OWNER.name(), saved.getId());
+            }
+            if (cacheService != null) {
+                cacheService.evictUser(saved.getId(), callerUserId);
+            }
+        }
 
         log.info("Created organization [{}] with slug [{}] and initial OWNER member [{}]",
                 saved.getId(), saved.getSlug(), callerUserId);
@@ -214,6 +269,12 @@ public class OrganizationService {
                             "Organization not found: " + organizationId);
                 });
 
+        if (orgAssignmentRepository != null) {
+            orgAssignmentRepository.deleteByOrganizationId(organizationId);
+        }
+        if (cacheService != null) {
+            cacheService.evictOrganization(organizationId);
+        }
         organizationInvitationRepository.deleteByOrganizationId(organizationId);
         organizationMemberRepository.deleteByOrganizationId(organizationId);
         organizationRepository.delete(organization);
