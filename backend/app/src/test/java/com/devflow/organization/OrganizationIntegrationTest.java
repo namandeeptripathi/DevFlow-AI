@@ -1,5 +1,6 @@
 package com.devflow.organization;
 
+import com.devflow.modules.auth.domain.Role;
 import com.devflow.organization.domain.Organization;
 import com.devflow.organization.domain.OrganizationInvitation;
 import com.devflow.organization.domain.OrganizationInvitationStatus;
@@ -15,6 +16,10 @@ import com.devflow.organization.repository.OrganizationRepository;
 import com.devflow.organization.service.OrganizationInvitationService;
 import com.devflow.organization.service.OrganizationMembershipService;
 import com.devflow.organization.service.OrganizationService;
+import com.devflow.role.domain.OrganizationRoleAssignment;
+import com.devflow.role.exception.RoleAssignmentAccessDeniedException;
+import com.devflow.role.repository.OrganizationRoleAssignmentRepository;
+import com.devflow.role.service.RoleAssignmentService;
 import com.devflow.security.user.DevFlowUserDetails;
 import com.devflow.user.domain.AccountStatus;
 import com.devflow.user.domain.User;
@@ -36,6 +41,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -83,6 +89,12 @@ class OrganizationIntegrationTest {
 
     @Autowired
     private OrganizationInvitationService organizationInvitationService;
+
+    @Autowired
+    private OrganizationRoleAssignmentRepository orgAssignmentRepository;
+
+    @Autowired
+    private RoleAssignmentService roleAssignmentService;
 
     private User ownerA;
     private User ownerB;
@@ -164,6 +176,15 @@ class OrganizationIntegrationTest {
             assertThat(ownerMember).isPresent();
             assertThat(ownerMember.get().getRole()).isEqualTo(OrganizationRole.OWNER);
             assertThat(ownerMember.get().getStatus()).isEqualTo(OrganizationMembershipStatus.ACTIVE);
+
+            // Verify founding owner role assignment synchronization
+            List<OrganizationRoleAssignment> activeAssignments = orgAssignmentRepository
+                    .findActiveByOrganizationId(created.getId(), Instant.now());
+            assertThat(activeAssignments).hasSize(1);
+            OrganizationRoleAssignment ownerAssignment = activeAssignments.get(0);
+            assertThat(ownerAssignment.getUser().getId()).isEqualTo(devUser.getId());
+            assertThat(ownerAssignment.getRole().getName()).isEqualTo("ORGANIZATION_OWNER");
+            assertThat(ownerAssignment.isActive()).isTrue();
         }
 
         @Test
@@ -217,6 +238,7 @@ class OrganizationIntegrationTest {
                     orgA.getId(), OrganizationMembershipStatus.ACTIVE)).isEmpty();
             assertThat(organizationInvitationRepository.findByOrganizationIdAndStatus(
                     orgA.getId(), OrganizationInvitationStatus.PENDING)).isEmpty();
+            assertThat(orgAssignmentRepository.findByOrganizationId(orgA.getId())).isEmpty();
         }
     }
 
@@ -227,7 +249,7 @@ class OrganizationIntegrationTest {
     class MembershipIntegrationTests {
 
         @Test
-        @DisplayName("addMember, changeMemberRole, and removeMember execute against PostgreSQL")
+        @DisplayName("addMember, changeMemberRole, and removeMember execute against PostgreSQL and stay synchronized with role assignments")
         void membershipLifecycle_succeeds() {
             // Add member
             OrganizationMember added = organizationMembershipService.addMember(
@@ -236,6 +258,12 @@ class OrganizationIntegrationTest {
             entityManager.flush();
             assertThat(organizationMemberRepository.existsByOrganizationIdAndUserId(orgA.getId(), devUser.getId()))
                     .isTrue();
+
+            // Verify active role assignment was synchronized to ORGANIZATION_MEMBER
+            List<OrganizationRoleAssignment> devAssignments = orgAssignmentRepository
+                    .findActiveByOrganizationIdAndUserId(orgA.getId(), devUser.getId(), Instant.now());
+            assertThat(devAssignments).hasSize(1);
+            assertThat(devAssignments.get(0).getRole().getName()).isEqualTo("ORGANIZATION_MEMBER");
 
             // Promote to ADMIN
             organizationMembershipService.changeMemberRole(
@@ -248,12 +276,64 @@ class OrganizationIntegrationTest {
                     .findByOrganizationIdAndUserId(orgA.getId(), devUser.getId()).orElseThrow();
             assertThat(reloaded.getRole()).isEqualTo(OrganizationRole.ADMIN);
 
+            // Verify role assignment was synchronized to ORGANIZATION_ADMIN and previous revoked
+            List<OrganizationRoleAssignment> adminAssignments = orgAssignmentRepository
+                    .findActiveByOrganizationIdAndUserId(orgA.getId(), devUser.getId(), Instant.now());
+            assertThat(adminAssignments).hasSize(1);
+            assertThat(adminAssignments.get(0).getRole().getName()).isEqualTo("ORGANIZATION_ADMIN");
+
             // Remove member
             organizationMembershipService.removeMember(orgA.getId(), devUser.getId(), ownerA.getId());
 
             entityManager.flush();
+            entityManager.clear();
+
             assertThat(organizationMemberRepository.existsByOrganizationIdAndUserId(orgA.getId(), devUser.getId()))
                     .isFalse();
+            assertThat(orgAssignmentRepository.findActiveByOrganizationIdAndUserId(orgA.getId(), devUser.getId(), Instant.now()))
+                    .isEmpty();
+        }
+
+        @Test
+        @DisplayName("founding owner appears in role assignment listing via RoleAssignmentService")
+        void foundingOwner_appearsInRoleAssignmentListing() {
+            List<OrganizationRoleAssignment> assignments = roleAssignmentService
+                    .listOrganizationRoleAssignments(orgA.getId(), ownerA.getId(), true);
+            assertThat(assignments).isNotEmpty();
+            assertThat(assignments).anyMatch(a ->
+                    a.getUser().getId().equals(ownerA.getId()) &&
+                    a.getRole().getName().equals("ORGANIZATION_OWNER") &&
+                    a.isActive());
+        }
+
+        @Test
+        @DisplayName("expired owner assignments do not count as active owners; sole unexpired owner remains protected")
+        void expiredAssignments_doNotCountAsActiveOwners() {
+            // Add devUser as member and assign expired OWNER role
+            organizationMembershipService.addMember(orgA.getId(), devUser.getId(), OrganizationRole.DEVELOPER, ownerA.getId());
+            entityManager.flush();
+
+            Instant pastTime = Instant.now().minus(2, ChronoUnit.HOURS);
+            roleAssignmentService.assignOrganizationRole(
+                    orgA.getId(), devUser.getId(), Role.ORGANIZATION_OWNER, ownerA.getId(), pastTime);
+            entityManager.flush();
+
+            // Even though devUser has an OWNER assignment record, it is expired!
+            // Attempting to remove ownerA (sole active unexpired owner) must fail
+            assertThatThrownBy(() -> organizationMembershipService.removeMember(
+                    orgA.getId(), ownerA.getId(), ownerA.getId()))
+                    .isInstanceOf(LastOrganizationOwnerRemovalException.class);
+
+            // Attempting to demote ownerA must fail
+            assertThatThrownBy(() -> organizationMembershipService.changeMemberRole(
+                    orgA.getId(), ownerA.getId(), OrganizationRole.ADMIN, ownerA.getId()))
+                    .isInstanceOf(LastOrganizationOwnerRemovalException.class);
+
+            // Attempting to revoke ownerA via RoleAssignmentService must fail
+            assertThatThrownBy(() -> roleAssignmentService.revokeOrganizationRole(
+                    orgA.getId(), ownerA.getId(), Role.ORGANIZATION_OWNER, ownerA.getId(), "test"))
+                    .isInstanceOf(RoleAssignmentAccessDeniedException.class)
+                    .hasMessageContaining("sole active ORGANIZATION_OWNER");
         }
 
         @Test

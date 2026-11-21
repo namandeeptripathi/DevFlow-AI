@@ -1,5 +1,7 @@
 package com.devflow.organization.service;
 
+import com.devflow.modules.auth.domain.Role;
+import com.devflow.modules.auth.domain.RoleScope;
 import com.devflow.organization.domain.Organization;
 import com.devflow.organization.domain.OrganizationMember;
 import com.devflow.organization.domain.OrganizationMembershipStatus;
@@ -11,6 +13,11 @@ import com.devflow.organization.exception.OrganizationNotFoundException;
 import com.devflow.organization.repository.OrganizationInvitationRepository;
 import com.devflow.organization.repository.OrganizationMemberRepository;
 import com.devflow.organization.repository.OrganizationRepository;
+import com.devflow.role.domain.OrganizationRoleAssignment;
+import com.devflow.role.domain.RoleEntity;
+import com.devflow.role.repository.OrganizationRoleAssignmentRepository;
+import com.devflow.role.repository.RoleRepository;
+import com.devflow.security.authorization.cache.AuthorizationCacheService;
 import com.devflow.user.domain.AccountStatus;
 import com.devflow.user.domain.User;
 import com.devflow.user.repository.UserRepository;
@@ -55,6 +62,15 @@ class OrganizationServiceTest {
 
     @Mock
     private OrganizationAuthorizationService authorizationService;
+
+    @Mock
+    private OrganizationRoleAssignmentRepository orgAssignmentRepository;
+
+    @Mock
+    private RoleRepository roleRepository;
+
+    @Mock
+    private AuthorizationCacheService cacheService;
 
     private OrganizationService organizationService;
 
@@ -380,6 +396,120 @@ class OrganizationServiceTest {
 
             assertThatThrownBy(() -> organizationService.getOrganizationBySlug("acme-corp", callerUserId))
                     .isInstanceOf(OrganizationMembershipRequiredException.class);
+        }
+    }
+
+    // ── FOUNDING OWNER ROLE SYNCHRONIZATION TESTS ─────────────────────────────
+
+    @Nested
+    @DisplayName("Founding Owner Role Synchronization Tests")
+    class FoundingOwnerRoleSyncTests {
+
+        private OrganizationService syncService;
+        private RoleEntity ownerRoleEntity;
+
+        @BeforeEach
+        void setUpSync() {
+            syncService = new OrganizationService(
+                    organizationRepository,
+                    organizationMemberRepository,
+                    organizationInvitationRepository,
+                    userRepository,
+                    authorizationService,
+                    orgAssignmentRepository,
+                    roleRepository,
+                    cacheService
+            );
+
+            ownerRoleEntity = RoleEntity.builder()
+                    .id(UUID.randomUUID())
+                    .name("ORGANIZATION_OWNER")
+                    .scope(RoleScope.ORGANIZATION)
+                    .build();
+        }
+
+        @Test
+        @DisplayName("createOrganization creates founding owner role assignment atomically")
+        void createOrganization_createsFoundingOwnerRoleAssignment() {
+            when(organizationRepository.existsBySlug("acme-corp")).thenReturn(false);
+            when(userRepository.findById(callerUserId)).thenReturn(Optional.of(testUser));
+            when(organizationRepository.save(any(Organization.class))).thenAnswer(inv -> {
+                Organization org = inv.getArgument(0);
+                org.setId(organizationId);
+                return org;
+            });
+            when(roleRepository.findByName("ORGANIZATION_OWNER")).thenReturn(Optional.of(ownerRoleEntity));
+            when(orgAssignmentRepository.hasActiveAssignment(eq(organizationId), eq(callerUserId), eq(ownerRoleEntity.getId()), any(Instant.class)))
+                    .thenReturn(false);
+
+            Organization result = syncService.createOrganization("Acme Corp", "acme-corp", "desc", callerUserId);
+
+            assertThat(result).isNotNull();
+            ArgumentCaptor<OrganizationRoleAssignment> captor = ArgumentCaptor.forClass(OrganizationRoleAssignment.class);
+            verify(orgAssignmentRepository).save(captor.capture());
+            OrganizationRoleAssignment assignment = captor.getValue();
+            assertThat(assignment.getOrganization().getId()).isEqualTo(organizationId);
+            assertThat(assignment.getUser()).isEqualTo(testUser);
+            assertThat(assignment.getRole()).isEqualTo(ownerRoleEntity);
+            assertThat(assignment.getRoleScope()).isEqualTo(RoleScope.ORGANIZATION);
+            assertThat(assignment.getAssignedBy()).isEqualTo(testUser);
+            assertThat(assignment.getAssignedAt()).isNotNull();
+
+            verify(cacheService).evictUser(organizationId, callerUserId);
+        }
+
+        @Test
+        @DisplayName("createOrganization prevents duplicate assignment when active assignment already exists")
+        void createOrganization_preventsDuplicateActiveAssignment() {
+            when(organizationRepository.existsBySlug("acme-corp")).thenReturn(false);
+            when(userRepository.findById(callerUserId)).thenReturn(Optional.of(testUser));
+            when(organizationRepository.save(any(Organization.class))).thenAnswer(inv -> {
+                Organization org = inv.getArgument(0);
+                org.setId(organizationId);
+                return org;
+            });
+            when(roleRepository.findByName("ORGANIZATION_OWNER")).thenReturn(Optional.of(ownerRoleEntity));
+            when(orgAssignmentRepository.hasActiveAssignment(eq(organizationId), eq(callerUserId), eq(ownerRoleEntity.getId()), any(Instant.class)))
+                    .thenReturn(true);
+
+            Organization result = syncService.createOrganization("Acme Corp", "acme-corp", "desc", callerUserId);
+
+            assertThat(result).isNotNull();
+            verify(orgAssignmentRepository, never()).save(any());
+        }
+
+        @Test
+        @DisplayName("createOrganization rolls back transaction when canonical role is missing from catalog")
+        void createOrganization_missingRoleEntity_throwsExceptionAndRollsBack() {
+            when(organizationRepository.existsBySlug("acme-corp")).thenReturn(false);
+            when(userRepository.findById(callerUserId)).thenReturn(Optional.of(testUser));
+            when(organizationRepository.save(any(Organization.class))).thenAnswer(inv -> {
+                Organization org = inv.getArgument(0);
+                org.setId(organizationId);
+                return org;
+            });
+            when(roleRepository.findByName("ORGANIZATION_OWNER")).thenReturn(Optional.empty());
+
+            assertThatThrownBy(() -> syncService.createOrganization("Acme Corp", "acme-corp", "desc", callerUserId))
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining("ORGANIZATION_OWNER");
+
+            verify(orgAssignmentRepository, never()).save(any());
+        }
+
+        @Test
+        @DisplayName("deleteOrganization deletes role assignments and evicts organization cache")
+        void deleteOrganization_deletesRoleAssignmentsAndEvictsCache() {
+            doNothing().when(authorizationService).requireOwner(organizationId, callerUserId);
+            when(organizationRepository.findById(organizationId)).thenReturn(Optional.of(testOrg));
+
+            syncService.deleteOrganization(organizationId, callerUserId);
+
+            verify(orgAssignmentRepository).deleteByOrganizationId(organizationId);
+            verify(cacheService).evictOrganization(organizationId);
+            verify(organizationInvitationRepository).deleteByOrganizationId(organizationId);
+            verify(organizationMemberRepository).deleteByOrganizationId(organizationId);
+            verify(organizationRepository).delete(testOrg);
         }
     }
 }

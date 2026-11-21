@@ -1,5 +1,7 @@
 package com.devflow.organization.service;
 
+import com.devflow.modules.auth.domain.Role;
+import com.devflow.modules.auth.domain.RoleScope;
 import com.devflow.organization.domain.Organization;
 import com.devflow.organization.domain.OrganizationMember;
 import com.devflow.organization.domain.OrganizationMembershipStatus;
@@ -12,6 +14,11 @@ import com.devflow.organization.exception.OrganizationMembershipRequiredExceptio
 import com.devflow.organization.exception.OrganizationNotFoundException;
 import com.devflow.organization.repository.OrganizationMemberRepository;
 import com.devflow.organization.repository.OrganizationRepository;
+import com.devflow.role.domain.OrganizationRoleAssignment;
+import com.devflow.role.domain.RoleEntity;
+import com.devflow.role.repository.OrganizationRoleAssignmentRepository;
+import com.devflow.role.repository.RoleRepository;
+import com.devflow.security.authorization.cache.AuthorizationCacheService;
 import com.devflow.team.domain.TeamRole;
 import com.devflow.team.domain.TeamStatus;
 import com.devflow.team.exception.InvalidTeamOperationException;
@@ -61,6 +68,15 @@ class OrganizationMembershipServiceTest {
 
     @Mock
     private TeamMemberRepository teamMemberRepository;
+
+    @Mock
+    private OrganizationRoleAssignmentRepository orgAssignmentRepository;
+
+    @Mock
+    private RoleRepository roleRepository;
+
+    @Mock
+    private AuthorizationCacheService cacheService;
 
     private OrganizationMembershipService membershipService;
 
@@ -427,6 +443,201 @@ class OrganizationMembershipServiceTest {
             assertThatThrownBy(() -> membershipService.listActiveMembers(organizationId, callerUserId))
                     .isInstanceOf(OrganizationNotFoundException.class)
                     .hasMessageContaining(organizationId.toString());
+        }
+    }
+
+    // ── MEMBERSHIP ROLE SYNCHRONIZATION & OWNER PROTECTION TESTS ─────────────
+
+    @Nested
+    @DisplayName("Membership Role Synchronization & Protection Tests")
+    class MembershipRoleSyncAndProtectionTests {
+
+        private OrganizationMembershipService syncMembershipService;
+        private RoleEntity ownerRoleEntity;
+        private RoleEntity adminRoleEntity;
+        private RoleEntity memberRoleEntity;
+
+        @BeforeEach
+        void setUpSync() {
+            syncMembershipService = new OrganizationMembershipService(
+                    organizationMemberRepository,
+                    organizationRepository,
+                    userRepository,
+                    authorizationService,
+                    teamMemberRepository,
+                    cacheService,
+                    orgAssignmentRepository,
+                    roleRepository
+            );
+
+            ownerRoleEntity = RoleEntity.builder()
+                    .id(UUID.randomUUID())
+                    .name("ORGANIZATION_OWNER")
+                    .scope(RoleScope.ORGANIZATION)
+                    .build();
+
+            adminRoleEntity = RoleEntity.builder()
+                    .id(UUID.randomUUID())
+                    .name("ORGANIZATION_ADMIN")
+                    .scope(RoleScope.ORGANIZATION)
+                    .build();
+
+            memberRoleEntity = RoleEntity.builder()
+                    .id(UUID.randomUUID())
+                    .name("ORGANIZATION_MEMBER")
+                    .scope(RoleScope.ORGANIZATION)
+                    .build();
+        }
+
+        @Test
+        @DisplayName("addMember synchronizes canonical role assignment to OrganizationRoleAssignment")
+        void addMember_synchronizesCanonicalRoleAssignment() {
+            doNothing().when(authorizationService).requireAdminOrOwner(organizationId, callerUserId);
+            when(organizationRepository.findById(organizationId)).thenReturn(Optional.of(testOrg));
+            when(userRepository.findById(targetUserId)).thenReturn(Optional.of(targetUser));
+            when(organizationMemberRepository.existsByOrganizationIdAndUserId(organizationId, targetUserId))
+                    .thenReturn(false);
+            when(organizationMemberRepository.save(any(OrganizationMember.class)))
+                    .thenAnswer(inv -> inv.getArgument(0));
+            when(roleRepository.findByName("ORGANIZATION_MEMBER")).thenReturn(Optional.of(memberRoleEntity));
+            when(orgAssignmentRepository.hasActiveAssignment(eq(organizationId), eq(targetUserId), eq(memberRoleEntity.getId()), any(Instant.class)))
+                    .thenReturn(false);
+            when(userRepository.findById(callerUserId)).thenReturn(Optional.of(targetUser));
+
+            OrganizationMember result = syncMembershipService.addMember(
+                    organizationId, targetUserId, OrganizationRole.DEVELOPER, callerUserId);
+
+            assertThat(result).isNotNull();
+            ArgumentCaptor<OrganizationRoleAssignment> captor = ArgumentCaptor.forClass(OrganizationRoleAssignment.class);
+            verify(orgAssignmentRepository).save(captor.capture());
+            OrganizationRoleAssignment assignment = captor.getValue();
+            assertThat(assignment.getRole()).isEqualTo(memberRoleEntity);
+            assertThat(assignment.getOrganization()).isEqualTo(testOrg);
+            assertThat(assignment.getUser()).isEqualTo(targetUser);
+
+            verify(cacheService).evictUser(organizationId, targetUserId);
+        }
+
+        @Test
+        @DisplayName("removeMember deletes role assignments for the removed member")
+        void removeMember_deletesRoleAssignmentsForMember() {
+            doNothing().when(authorizationService).requireAdminOrOwner(organizationId, callerUserId);
+            when(organizationMemberRepository.findByOrganizationIdAndUserId(organizationId, targetUserId))
+                    .thenReturn(Optional.of(activeDeveloperMember));
+            when(orgAssignmentRepository.findActiveByOrganizationIdAndUserId(eq(organizationId), eq(targetUserId), any(Instant.class)))
+                    .thenReturn(List.of());
+            when(orgAssignmentRepository.hasAnyAssignments(organizationId, targetUserId)).thenReturn(true);
+            when(teamMemberRepository.existsByUserIdAndRoleAndOrganizationIdAndTeamStatus(
+                    targetUserId, TeamRole.LEAD, organizationId, TeamStatus.ACTIVE)).thenReturn(false);
+
+            syncMembershipService.removeMember(organizationId, targetUserId, callerUserId);
+
+            verify(orgAssignmentRepository).deleteByOrganizationIdAndUserId(organizationId, targetUserId);
+            verify(organizationMemberRepository).delete(activeDeveloperMember);
+            verify(cacheService).evictUser(organizationId, targetUserId);
+        }
+
+        @Test
+        @DisplayName("removeMember rejects removing sole owner when another owner assignment is expired")
+        void removeMember_soleOwner_rejectedWhenAnotherOwnerAssignmentIsExpired() {
+            doNothing().when(authorizationService).requireAdminOrOwner(organizationId, callerUserId);
+            when(organizationMemberRepository.findByOrganizationIdAndUserId(organizationId, targetUserId))
+                    .thenReturn(Optional.of(activeOwnerMember));
+
+            // targetUser holds active OWNER assignment
+            OrganizationRoleAssignment targetAssignment = OrganizationRoleAssignment.builder()
+                    .role(ownerRoleEntity)
+                    .build();
+            when(orgAssignmentRepository.findActiveByOrganizationIdAndUserId(eq(organizationId), eq(targetUserId), any(Instant.class)))
+                    .thenReturn(List.of(targetAssignment));
+
+            // countActiveOwners returns 1 because the second owner's assignment has expired
+            when(orgAssignmentRepository.hasAnyAssignments(organizationId, targetUserId)).thenReturn(true);
+            when(orgAssignmentRepository.countActiveOwners(eq(organizationId), any(Instant.class))).thenReturn(1L);
+            when(organizationMemberRepository.findByOrganizationIdAndStatus(organizationId, OrganizationMembershipStatus.ACTIVE))
+                    .thenReturn(List.of(activeOwnerMember));
+
+            assertThatThrownBy(() -> syncMembershipService.removeMember(organizationId, targetUserId, callerUserId))
+                    .isInstanceOf(LastOrganizationOwnerRemovalException.class)
+                    .hasMessageContaining("Cannot remove the last active OWNER");
+
+            verify(organizationMemberRepository, never()).delete(any());
+            verify(orgAssignmentRepository, never()).deleteByOrganizationIdAndUserId(any(), any());
+        }
+
+        @Test
+        @DisplayName("changeMemberRole synchronizes canonical role assignments (revokes old, assigns new)")
+        void changeMemberRole_synchronizesRoleAssignments() {
+            doNothing().when(authorizationService).requireOwner(organizationId, callerUserId);
+            when(organizationMemberRepository.findByOrganizationIdAndUserId(organizationId, targetUserId))
+                    .thenReturn(Optional.of(activeDeveloperMember));
+            when(orgAssignmentRepository.findActiveByOrganizationIdAndUserId(eq(organizationId), eq(targetUserId), any(Instant.class)))
+                    .thenReturn(List.of());
+            when(orgAssignmentRepository.hasAnyAssignments(organizationId, targetUserId)).thenReturn(true);
+            when(organizationMemberRepository.save(any(OrganizationMember.class))).thenAnswer(inv -> inv.getArgument(0));
+
+            // Old role DEVELOPER maps to ORGANIZATION_MEMBER
+            OrganizationRoleAssignment oldAssignment = OrganizationRoleAssignment.builder()
+                    .id(UUID.randomUUID())
+                    .organization(testOrg)
+                    .user(targetUser)
+                    .role(memberRoleEntity)
+                    .assignedBy(targetUser)
+                    .assignedAt(Instant.now().minusSeconds(3600))
+                    .build();
+
+            when(roleRepository.findByName("ORGANIZATION_MEMBER")).thenReturn(Optional.of(memberRoleEntity));
+            when(roleRepository.findByName("ORGANIZATION_ADMIN")).thenReturn(Optional.of(adminRoleEntity));
+            when(orgAssignmentRepository.findActiveByOrganizationIdAndUserIdAndRoleId(
+                    eq(organizationId), eq(targetUserId), eq(memberRoleEntity.getId()), any(Instant.class)))
+                    .thenReturn(Optional.of(oldAssignment));
+            when(orgAssignmentRepository.hasActiveAssignment(
+                    eq(organizationId), eq(targetUserId), eq(adminRoleEntity.getId()), any(Instant.class)))
+                    .thenReturn(false);
+            when(userRepository.findById(callerUserId)).thenReturn(Optional.of(targetUser));
+
+            OrganizationMember result = syncMembershipService.changeMemberRole(
+                    organizationId, targetUserId, OrganizationRole.ADMIN, callerUserId);
+
+            assertThat(result.getRole()).isEqualTo(OrganizationRole.ADMIN);
+
+            // Verify old assignment was revoked and new assignment was saved
+            assertThat(oldAssignment.getRevokedAt()).isNotNull();
+            assertThat(oldAssignment.getRevocationReason()).isEqualTo("ROLE_CHANGED");
+            ArgumentCaptor<OrganizationRoleAssignment> saveCaptor = ArgumentCaptor.forClass(OrganizationRoleAssignment.class);
+            verify(orgAssignmentRepository, org.mockito.Mockito.times(2)).save(saveCaptor.capture());
+            List<OrganizationRoleAssignment> savedAssignments = saveCaptor.getAllValues();
+            assertThat(savedAssignments).contains(oldAssignment);
+            assertThat(savedAssignments.stream().anyMatch(a -> a.getRole().equals(adminRoleEntity))).isTrue();
+
+            verify(cacheService).evictUser(organizationId, targetUserId);
+        }
+
+        @Test
+        @DisplayName("changeMemberRole demote sole owner rejected when another owner assignment is expired")
+        void changeMemberRole_demoteSoleOwner_rejectedWhenAnotherOwnerAssignmentIsExpired() {
+            doNothing().when(authorizationService).requireOwner(organizationId, callerUserId);
+            when(organizationMemberRepository.findByOrganizationIdAndUserId(organizationId, targetUserId))
+                    .thenReturn(Optional.of(activeOwnerMember));
+
+            OrganizationRoleAssignment targetAssignment = OrganizationRoleAssignment.builder()
+                    .role(ownerRoleEntity)
+                    .build();
+            when(orgAssignmentRepository.findActiveByOrganizationIdAndUserId(eq(organizationId), eq(targetUserId), any(Instant.class)))
+                    .thenReturn(List.of(targetAssignment));
+
+            // Second owner's assignment expired -> only 1 active owner
+            when(orgAssignmentRepository.hasAnyAssignments(organizationId, targetUserId)).thenReturn(true);
+            when(orgAssignmentRepository.countActiveOwners(eq(organizationId), any(Instant.class))).thenReturn(1L);
+            when(organizationMemberRepository.findByOrganizationIdAndStatus(organizationId, OrganizationMembershipStatus.ACTIVE))
+                    .thenReturn(List.of(activeOwnerMember));
+
+            assertThatThrownBy(() -> syncMembershipService.changeMemberRole(
+                    organizationId, targetUserId, OrganizationRole.DEVELOPER, callerUserId))
+                    .isInstanceOf(LastOrganizationOwnerRemovalException.class)
+                    .hasMessageContaining("Cannot demote the last active OWNER");
+
+            verify(organizationMemberRepository, never()).save(any());
         }
     }
 }

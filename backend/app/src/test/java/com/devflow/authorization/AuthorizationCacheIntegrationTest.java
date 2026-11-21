@@ -14,6 +14,7 @@ import com.devflow.role.adapter.DatabaseMembershipValidator;
 import com.devflow.role.adapter.DatabaseRoleResolver;
 import com.devflow.role.domain.OrganizationRoleAssignment;
 import com.devflow.role.domain.ProjectRoleAssignment;
+import com.devflow.role.registry.ProjectRegistry;
 import com.devflow.role.service.RoleAssignmentService;
 import com.devflow.security.authorization.cache.AuthorizationCacheService;
 import com.devflow.security.authorization.cache.RedisAuthorizationCacheService;
@@ -70,6 +71,9 @@ class AuthorizationCacheIntegrationTest {
     @Autowired
     private EntityManager entityManager;
 
+    @Autowired(required = false)
+    private ProjectRegistry projectRegistry;
+
     private User ownerA;
     private User devA;
     private User devB;
@@ -102,6 +106,11 @@ class AuthorizationCacheIntegrationTest {
         createOrgMember(orgB, devB, OrganizationRole.OWNER, OrganizationMembershipStatus.ACTIVE);
 
         projectA1 = UUID.randomUUID();
+
+        if (projectRegistry != null) {
+            projectRegistry.clear();
+            projectRegistry.registerProject(orgA.getId(), projectA1);
+        }
 
         entityManager.flush();
         entityManager.clear();
